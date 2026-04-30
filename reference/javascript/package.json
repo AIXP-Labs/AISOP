@@ -1,0 +1,22 @@
+{
+  "name": "aisop-protocol",
+  "version": "1.0.0",
+  "description": "AISOP V1.0.0 reference runtime — zero-dependency parser and validator for .aisop.json files",
+  "main": "flow_runtime.js",
+  "scripts": {
+    "test": "node test_all.js"
+  },
+  "keywords": [
+    "aisop",
+    "protocol",
+    "ai",
+    "agent",
+    "workflow"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AIXP-Labs/AISOP.git",
+    "directory": "reference/javascript"
+  }
+}

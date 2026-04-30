@@ -1,0 +1,79 @@
+[
+  {
+    "role": "system",
+    "content": {
+      "protocol": "AISOP V1.0.0",
+      "axiom_0": "Human_Sovereignty_and_Wellbeing",
+      "id": "deploy_pipeline",
+      "name": "Production Deploy Pipeline",
+      "version": "1.0.0",
+      "summary": "Automated deployment with human confirmation, runtime assertions, and background tasks",
+      "flow_format": "mermaid",
+      "tools": [],
+      "params": { "environment": "production" },
+      "system_prompt": "{system_prompt}"
+    }
+  },
+  {
+    "role": "user",
+    "content": {
+      "instruction": "RUN aisop.main",
+      "user_input": "{user_input}",
+      "aisop": {
+        "main": "graph TD\n    validate[Validate] --> test[Test]\n    test --> confirm{Confirm}\n    confirm -->|approved| deploy[Deploy]\n    confirm -->|rejected| abort((End))\n    deploy --> verify[Verify]\n    verify --> end_node((End))"
+      },
+      "functions": {
+        "validate": {
+          "step1": "sys.io.read('config.yaml') -> config_data",
+          "step2": "sys.assert('config_data != null', 'Config file missing')",
+          "step3": "sys.llm.classify(config_data, ['valid', 'invalid']) -> config_status",
+          "step4": "sys.assert('config_status == valid', 'Invalid configuration')",
+          "step5": "sys.io.print('Configuration validated')"
+        },
+        "test": {
+          "step1": "sys.run('npm run test') -> test_output",
+          "step2": "sys.assert('test_output.exit_code == 0', 'Tests failed')",
+          "step3": "sys.run('npm run lint') -> lint_output",
+          "step4": "sys.assert('lint_output.exit_code == 0', 'Lint errors found')",
+          "step5": "sys.security.audit('Tests and lint passed')"
+        },
+        "confirm": {
+          "step1": "sys.io.notify('All checks passed. Ready to deploy.')",
+          "step2": "sys.io.confirm('Deploy to production? This will affect live users.', options=['approved', 'rejected']) -> decision",
+          "step3": "sys.security.audit('Deploy decision received')",
+          "on_error": {
+            "confirm_rejected": "abort",
+            "confirm_timeout": "abort"
+          }
+        },
+        "deploy": {
+          "step1": "sys.security.audit('Production deploy started')",
+          "step2": "sys.state.save()",
+          "step3": "sys.run.bg('npm run build') -> build_handle",
+          "step4": "sys.run.bg('npm run lint -- --fix') -> lint_handle",
+          "step5": "sys.io.print('Build and lint started in background')",
+          "step6": "sys.state.set('deploy_started', true)",
+          "step7": "sys.event.wait('process_done', source=build_handle, timeout=600) -> build_result",
+          "step8": "sys.assert('build_result.exit_code == 0', 'Build failed')",
+          "step9": "sys.event.wait('process_done', source=lint_handle, timeout=120) -> lint_result",
+          "step10": "sys.assert('lint_result.exit_code == 0', 'Lint fix failed')",
+          "step11": "sys.event.emit('build_completed', build_result)",
+          "step12": "sys.run.timeout('npm run deploy', 300) -> deploy_result",
+          "step13": "sys.assert('deploy_result.exit_code == 0', 'Deploy failed')"
+        },
+        "verify": {
+          "step1": "sys.run('curl -s http://localhost/health') -> health_check",
+          "step2": "sys.assert('health_check.exit_code == 0', 'Health check failed')",
+          "step3": "sys.state.get('deploy_started') -> was_deployed",
+          "step4": "sys.assert('was_deployed == true', 'Deploy flag not set')",
+          "step5": "sys.security.audit('Deploy verified successfully')",
+          "step6": "sys.io.notify('Deployment complete and verified')"
+        },
+        "abort": {
+          "step1": "sys.io.notify('Deployment cancelled')",
+          "step2": "sys.security.audit('Deploy aborted by user')"
+        }
+      }
+    }
+  }
+]

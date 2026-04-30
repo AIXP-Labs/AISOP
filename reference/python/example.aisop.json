@@ -1,0 +1,34 @@
+[
+  {
+    "role": "system",
+    "content": {
+      "protocol": "AISOP V1.0.0",
+      "axiom_0": "Human_Sovereignty_and_Wellbeing",
+      "id": "greeting_assistant",
+      "name": "Greeting Assistant",
+      "version": "1.0.0",
+      "summary": "Classify user intent and respond",
+      "flow_format": "mermaid",
+      "tools": [],
+      "params": { "language": "en", "tone": "friendly" },
+      "system_prompt": "{system_prompt}"
+    }
+  },
+  {
+    "role": "user",
+    "content": {
+      "instruction": "RUN aisop.main",
+      "user_input": "{user_input}",
+      "aisop": {
+        "main": "graph TD\n    greet[Greet] --> classify{Classify}\n    classify -->|question| search[Search]\n    classify -->|chat| reply[Reply]\n    search --> end_node((End))\n    reply --> end_node"
+      },
+      "functions": {
+        "greet": { "step1": "Say hello to the user" },
+        "classify": { "step1": "Classify user intent as 'question' or 'chat'" },
+        "search": { "step1": "Search for relevant info" },
+        "reply": { "step1": "Generate a friendly reply" },
+        "end_node": { "step1": "Output final response" }
+      }
+    }
+  }
+]

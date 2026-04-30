@@ -1,0 +1,68 @@
+site_name: AISOP — AI Standard Operating Protocol
+site_description: AI Standard Operating Protocol — Defining structured AI programs with Mermaid or JSON flow graphs
+site_url: https://aisop.dev
+repo_url: https://github.com/AIXP-Labs/AISOP
+repo_name: AISOP
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.tabs.link
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Topics:
+    - What is AISOP?: topics/what-is-aisop.md
+    - Mermaid vs JSON Flow: topics/comparison-mermaid-vs-jsonflow.md
+    - Performance Comparison: topics/performance-mermaid-vs-jsonflow.md
+  - Governance:
+    - ADR-001 Mermaid as Primary Format: adrs/adr-001-mermaid-as-primary-format.md
+    - ADR-002 sys.io.confirm Immutability: adrs/adr-002-sys-io-confirm-immutability.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/AIXP-Labs

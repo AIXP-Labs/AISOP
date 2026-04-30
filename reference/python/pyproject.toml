@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aisop-protocol"
+version = "1.0.0"
+description = "AISOP V1.0.0 reference runtime — zero-dependency parser and validator for .aisop.json files"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+keywords = ["aisop", "protocol", "ai", "agent", "workflow"]
+
+[project.urls]
+Repository = "https://github.com/AIXP-Labs/AISOP"
+
+[tool.setuptools]
+py-modules = ["flow_runtime"]
