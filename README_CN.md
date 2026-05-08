@@ -251,6 +251,10 @@ AISOP 以**公理 0：人类主权与福祉**为基础 — AI 系统服务于人
 - [安全政策](SECURITY.md) — 漏洞报告与 `sys.io.confirm` 不可绕过性
 - [架构决策记录](adrs/) — 重大设计决策的论证
 
+## ⚠️ 免责声明
+
+本协议规范及参考实现仅供**研究和教育用途**。**实验性**软件，不适用于生产环境。使用风险由用户自行承担。作者对因使用本软件造成的任何损害不承担责任。完整条款见 [LICENSE](LICENSE)（Apache 2.0）。
+
 ## 许可证
 
 [Apache License 2.0](LICENSE) - Copyright 2026 AIXP Labs AIXP.dev | AISOP.dev

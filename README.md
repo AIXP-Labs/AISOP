@@ -252,6 +252,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines / 见 [CONTRIBUTING_CN.md]
 - [Security Policy](SECURITY.md) — Vulnerability reporting and `sys.io.confirm` immutability
 - [Architecture Decision Records](adrs/) — Design rationale for major decisions
 
+## ⚠️ Disclaimer
+
+This protocol specification and the reference implementations are provided for **research and educational purposes only**. They are **experimental** and not intended for production use. Use at your own risk. The authors assume no liability for any damages arising from use of this software. See [LICENSE](LICENSE) for full terms (Apache 2.0).
+
 ## License
 
 [Apache License 2.0](LICENSE) - Copyright 2026 AIXP Labs AIXP.dev | AISOP.dev
