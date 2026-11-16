@@ -29,18 +29,36 @@
 ## 贡献原则
 
 - 保持协议简洁 — 复杂性是缺陷，而非特性
-- 参考实现不得引入外部依赖
+- 参考库及原测试不得引入第三方运行依赖；包构建和可选文档工具另行区分
 - 所有控制流模式必须有对应测试用例
 - 协议变更需同步更新规范文件和参考实现
 
 ## 运行测试
 
+维护者应从仓库根目录直接运行两套测试：
+
 ```bash
 cd reference/python
-python test_all.py
+python -B test_all.py
+cd ../javascript
+node test_all.js
 ```
 
-提交前所有测试必须通过。
+实现改动要求两套测试均通过。静态拒绝用例命中预期错误即为用例通过；检查器通过不证明业务执行或真人确认。纯文档工作不要求重复已经记录且实现未变的测试。
+
+### 环境要求
+
+- 运行参考库及原测试只需要 Python 标准库或 Node.js 内置模块，不需要 pip/npm 安装。
+- Python 包构建单独使用 [pyproject.toml](reference/python/pyproject.toml) 声明的 setuptools 后端，SPDX 许可证元数据目前要求 77+。
+- 可选站点构建需要与 `mkdocs.yml` 兼容的 MkDocs、Material 主题和 Pymdown Extensions 环境；工具不可用或跳过构建不能写成通过。
+- Python 包声明支持 Python 3.10+。仓库 CI 配置覆盖 Python 3.10～3.15、Node.js 24 以及 ubuntu-24.04 和 windows-2022。配置了矩阵不代表某次工作流已经运行成功。
+- 使用上面的直接命令，不要把 `python run.py --test` 作为发布门：该 Python 包装入口没有传播测试子进程的非零退出码。
+
+### 分享前的隐私检查
+
+请使用合成示例，发布 Issue 或附日志前先脱敏。检查命令会输出元数据和步骤，`--prompt` 会输出构造后的完整 prompt；命令参数可能留在 shell 历史或进程列表中。不要附凭据、私钥、完整环境文件或原始私密对话。
+
+`.gitignore` 能减少误加入，但不会移除已跟踪文件、保护本地数据或扫描公开模板中的秘密。疑似漏洞按 [SECURITY.md](SECURITY.md) 私密报告，不要在公开复现中包含敏感内容。
 
 ## 写作规范
 

@@ -38,6 +38,8 @@ nav:
   - Governance:
     - ADR-001 Mermaid as Primary Format: adrs/adr-001-mermaid-as-primary-format.md
     - ADR-002 sys.io.confirm Immutability: adrs/adr-002-sys-io-confirm-immutability.md
+    - ADR-003 Step Mode Exclusivity: adrs/adr-003-step-mode-exclusivity.md
+    - ADR-004 Subgraph Invocation Rules: adrs/adr-004-subgraph-invocation-rules.md
 
 markdown_extensions:
   - admonition

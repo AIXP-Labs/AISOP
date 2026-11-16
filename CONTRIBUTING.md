@@ -29,18 +29,36 @@
 ## Guidelines
 
 - Keep the protocol simple — complexity is a bug, not a feature
-- Reference implementations should have zero external dependencies
+- Reference libraries and their tests should have zero external runtime dependencies; package-build and optional documentation tooling are separate
 - All control flow patterns must have corresponding test cases
 - Protocol changes require updating both the spec and reference implementation
 
 ## Running Tests
 
+Maintainers should run both suites directly from the repository root:
+
 ```bash
 cd reference/python
-python test_all.py
+python -B test_all.py
+cd ../javascript
+node test_all.js
 ```
 
-All tests must pass before submitting.
+Both suites must pass for implementation changes. Static rejection cases pass when they produce the expected errors; a passing checker is not proof of business execution or human confirmation. Documentation-only work does not require repeating unchanged, already-recorded suites.
+
+### Environment Requirements
+
+- Running the reference libraries and their tests requires only Python's standard library or Node.js built-ins; no pip/npm installation is needed.
+- Python package builds separately use the setuptools backend in [pyproject.toml](reference/python/pyproject.toml), currently 77+ for SPDX license metadata.
+- Optional site builds require a compatible MkDocs, Material theme and Pymdown Extensions environment for `mkdocs.yml`. Do not report an unavailable or skipped build as passing.
+- The Python package declares Python 3.10+. The repository CI configuration covers Python 3.10-3.15 and Node.js 24 on ubuntu-24.04 and windows-2022. A configured matrix is not evidence of a successful workflow run.
+- Use the direct commands above, not `python run.py --test` as a release gate: that Python wrapper does not propagate a child test process's nonzero exit status.
+
+### Privacy Before Sharing
+
+Use synthetic examples and redact private input before posting an issue or attaching logs. Inspection prints metadata and steps, and `--prompt` prints the constructed prompt; command arguments may remain in shell history or process listings. Never attach credentials, private keys, complete environment files or raw private conversations.
+
+`.gitignore` reduces accidental inclusion but does not remove already-tracked files, secure local data or scan public templates for secrets. Report suspected vulnerabilities through [SECURITY.md](SECURITY.md), not a public reproduction containing sensitive data.
 
 ## Writing Guidelines
 

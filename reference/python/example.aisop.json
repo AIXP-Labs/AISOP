@@ -10,7 +10,7 @@
       "summary": "Classify user intent and respond",
       "flow_format": "mermaid",
       "tools": [],
-      "params": { "language": "en", "tone": "friendly" },
+      "params": { "language": "string", "tone": "string" },
       "system_prompt": "{system_prompt}"
     }
   },

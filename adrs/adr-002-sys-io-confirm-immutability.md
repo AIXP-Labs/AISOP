@@ -54,6 +54,10 @@ The candidate constructs that could carry this weight in AISOP:
 
 - The specific UX of confirmation (text prompt, dialog, voice, etc.) is implementation-defined; only the blocking semantics are normative
 
+## Current Reference Implementation Scope (2026-11-15)
+
+Mechanical tests of the guarantee above require an implementation that actually executes confirmation and records the human response. The two reference libraries in this repository only load, check, analyze and build prompts; they do not implement a confirmation UI or demonstrate this runtime guarantee through their static suites. A passing checker is not evidence that a human gate occurred. This clarification does not weaken any decision or confirmation requirement above.
+
 ## Alternatives Considered
 
 ### Alternative 1: Trust-level bypass at T4
@@ -74,6 +78,8 @@ Considered for `sys.security.audit`, `sys.assert`, etc. — rejected for v1.0.0 
 - Related: AIAP_Standard.core MF32 (AIAP-side enforcement of this invariant)
 - Related: ADR-003 (Step Mode Exclusivity) — prevents `sys.io.confirm` from being smuggled in as natural-language text
 - CODE_OF_CONDUCT.md — explicit rejection of any change that weakens this guarantee
+
+Clarification: The assertion mechanism listed in Context is a historical alternative, not a statement that every current sys.assert failure immediately terminates the whole program. Current assertion and error-routing semantics are defined in specification §§6.5 and 6.12. The decision that sys.io.confirm is inviolable is unchanged.
 
 ---
 

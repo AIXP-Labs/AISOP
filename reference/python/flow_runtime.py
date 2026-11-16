@@ -17,197 +17,586 @@ Zero dependencies beyond Python stdlib.
 """
 
 import json
+import math
 import re
 from pathlib import Path
 
 
 # ── Mermaid Parser ─────────────────────────────────────────
 
-def _extract_node_shape(text: str, node_types: dict, node_labels: dict, delegate_targets: dict) -> str | None:
-    """Extract node ID from text with optional Mermaid shape. Records type and label."""
-    text = text.strip()
-    if not text:
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+STEP_KEY = re.compile(r"step[1-9][0-9]*\Z")
+CALL = re.compile(r"RUN aisop\.([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]+->[ \t]*([A-Za-z_][A-Za-z0-9_]*))?\Z")
+_WS = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+_BAD_WS = "\u001c\u001d\u001e\u001f\u0085\ufeff"
+_WS_CLASS = "[" + re.escape(_WS) + "]"
+RESERVED_KEYS = frozenset((
+    "join", "map", "on_error", "retry_policy", "context_filter",
+    "output_mapping", "constraints", "execute_mode",
+))
+
+
+def parse_call(step):
+    """Recognize one whole RUN step; this does not execute it."""
+    if not isinstance(step, str):
         return None
+    match = CALL.fullmatch(step.strip(_WS))
+    return {"target": match[1], "store": match[2]} if match else None
 
-    # name((text)) → end
-    m = re.match(r'^(\w+)\(\((.+?)\)\)$', text)
-    if m:
-        name, label = m.group(1), m.group(2)
-        node_types[name] = "end"
-        node_labels[name] = label
-        return name
 
-    # name{text} → decision
-    m = re.match(r'^(\w+)\{(.+?)\}$', text)
-    if m:
-        name, label = m.group(1), m.group(2)
-        node_types[name] = "decision"
-        node_labels[name] = label
-        return name
+def _unquote(text):
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1]
+    return text
 
-    # name[text] → process or delegate
-    m = re.match(r'^(\w+)\[(.+?)\]$', text)
-    if m:
-        name, label = m.group(1), m.group(2)
-        if label.startswith("aisop."):
-            node_types[name] = "delegate"
-            delegate_targets[name] = label[len("aisop."):]
-        else:
-            node_types[name] = "process"
-        node_labels[name] = label
-        return name
 
-    # plain name (no shape)
-    m = re.match(r'^(\w+)$', text)
-    if m:
-        return m.group(1)
+def _label_end(text, start, closing):
+    """Find a delimiter without interpreting ordinary label punctuation."""
+    pos = start
+    while pos < len(text) and text[pos] in _WS:
+        pos += 1
+    if pos < len(text) and text[pos] in ("'", '"'):
+        quote, escaped = text[pos], False
+        pos += 1
+        while pos < len(text):
+            char = text[pos]
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                pos += 1
+                while pos < len(text) and text[pos] in _WS:
+                    pos += 1
+                if text.startswith(closing, pos):
+                    return pos
+                raise ValueError("Text after quoted label")
+            pos += 1
+        raise ValueError("Unclosed quoted label")
+    stack, pos = [], start
+    while pos < len(text):
+        if not stack and text.startswith(closing, pos):
+            return pos
+        char = text[pos]
+        if char in "[{(":
+            stack.append(char)
+        elif char in "]})":
+            if not stack or "[{("["]})".index(char)] != stack.pop():
+                raise ValueError("Unbalanced node shape")
+        pos += 1
+    raise ValueError("Unclosed label")
 
-    return None
+
+def _outside(text):
+    """Yield connection positions; label protection does not trim its value."""
+    pos = 0
+    while pos < len(text):
+        char = text[pos]
+        if char in "[{(":
+            left = "((" if text.startswith("((", pos) else char
+            closing = {"[": "]", "{": "}", "(": ")", "((": "))"}[left]
+            pos = _label_end(text, pos + len(left), closing) + len(closing)
+            continue
+        if text.startswith("-- ", pos):
+            yield from range(pos, pos + 3)
+            end = _label_end(text, pos + 3, "-->")
+            yield from range(end, end + 3)
+            pos = end + 3
+            continue
+        if text.startswith("-->", pos):
+            yield from range(pos, pos + 3)
+            pos += 3
+            cursor = pos
+            while cursor < len(text) and text[cursor] in " \t":
+                cursor += 1
+            if cursor < len(text) and text[cursor] == "|":
+                yield from range(pos, cursor + 1)
+                end = _label_end(text, cursor + 1, "|")
+                yield end
+                pos = end + 1
+            continue
+        if char in "]})":
+            raise ValueError("Unbalanced node shape")
+        yield pos
+        pos += 1
+
+
+def _bad_call(step):
+    # Candidate recognition only; never use this normalization to execute a step.
+    candidate = step.strip(_WS + _BAD_WS)
+    gap = "[" + re.escape(_WS + _BAD_WS) + "]"
+    if (candidate.startswith("RUN ")
+            or re.match(r"^RUN" + gap + r"+aisop\.", candidate)
+            or re.match(r"^aisop" + _WS_CLASS + r"*\[", candidate)):
+        return True
+    pos = 0
+    while pos < len(step):
+        boundary = pos == 0 or step[pos - 1] not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+        back = pos - 1
+        while back >= 0 and step[back] == "\\":
+            back -= 1
+        if step[pos] in ("'", '"') and boundary and (pos - back - 1) % 2 == 0:
+            quote, end, escaped = step[pos], pos + 1, False
+            while end < len(step):
+                if escaped:
+                    escaped = False
+                elif step[end] == "\\":
+                    escaped = True
+                elif step[end] == quote:
+                    break
+                end += 1
+            if end < len(step):
+                pos = end + 1
+                continue
+        if boundary and step.startswith("RUN aisop.", pos):
+            return True
+        pos += 1
+    return False
+
+
+def _endpoints(text):
+    cuts = [i for i in _outside(text) if text[i] == "&"]
+    parts, start = [], 0
+    for end in cuts + [len(text)]:
+        raw = text[start:end].strip(_WS)
+        match = re.fullmatch(r"([^" + re.escape(_WS) + r"\[\]{}()&|]+)(.*)", raw)
+        if not match:
+            raise ValueError("Unsupported endpoint")
+        name, tail = match.groups()
+        label, kind, raw_label = None, None, None
+        if tail:
+            shapes = (("((", "))", "end"), ("[", "]", "process"), ("{", "}", "decision"))
+            for left, right, candidate in shapes:
+                if tail.startswith(left) and tail.endswith(right):
+                    raw_label = tail[len(left):-len(right)]
+                    label, kind = _unquote(raw_label), candidate
+                    break
+            if label is None:
+                raise ValueError("Unsupported node shape")
+            if kind == "process" and re.fullmatch(r"aisop\.[A-Za-z_][A-Za-z0-9_]*", label):
+                kind = "delegate"
+        parts.append((name, label, kind, raw_label))
+        start = end + 1
+    return parts
+
+
+def _mermaid_line(line):
+    outside = set(_outside(line))
+    segments, edges, start, pos = [], [], 0, 0
+    while pos < len(line):
+        if pos not in outside:
+            pos += 1
+            continue
+        error, label, end = False, None, None
+        if line.startswith("-.->", pos):
+            error, end = True, pos + 4
+        elif line.startswith("-->", pos):
+            end = pos + 3
+            cursor = end
+            while cursor < len(line) and line[cursor] in " \t":
+                cursor += 1
+            if cursor < len(line) and line[cursor] == "|":
+                closing = next((i for i in range(cursor + 1, len(line))
+                                if i in outside and line[i] == "|"), None)
+                if closing is None:
+                    raise ValueError("Unclosed edge label")
+                label, end = _unquote(line[cursor + 1:closing].strip(_WS)), closing + 1
+        elif line.startswith("-- ", pos):
+            closing = next((i for i in range(pos + 3, len(line))
+                            if i in outside and line.startswith("-->", i)), None)
+            if closing is None:
+                raise ValueError("Unclosed long edge")
+            label, end = _unquote(line[pos + 3:closing].strip(_WS)), closing + 3
+        if end is None:
+            pos += 1
+            continue
+        segments.append(_endpoints(line[start:pos]))
+        edges.append((error, label))
+        start, pos = end, end
+    segments.append(_endpoints(line[start:]))
+    return segments, edges
+
+
+def _parse_mermaid(text):
+    nodes, types, labels, raw_labels, lines, partial = {}, {}, {}, {}, {}, []
+    for number, raw in enumerate(re.split(r"\r\n|\n|\r", text), 1):
+        line = raw.strip(_WS)
+        if not line or line.startswith("%%") or re.fullmatch(r"(?:graph|flowchart)" + _WS_CLASS + r"+(?:TD|TB|BT|LR|RL);?", line):
+            continue
+        try:
+            segments, edges = _mermaid_line(line)
+        except ValueError:
+            partial.append(number)
+            continue
+        for group in segments:
+            for name, label, kind, raw_label in group:
+                nodes.setdefault(name, {})
+                lines.setdefault(name, number)
+                if label is not None:
+                    types[name], labels[name] = kind, label
+                    raw_labels[name] = raw_label
+                    if kind == "delegate":
+                        nodes[name]["delegate_to"] = label[6:]
+        for i, (error, label) in enumerate(edges):
+            for source, _, _, _ in segments[i]:
+                for target, _, _, _ in segments[i + 1]:
+                    node = nodes[source]
+                    if error:
+                        node["error"] = target
+                    elif label is not None:
+                        node.setdefault("branches", {})[label] = target
+                    elif target not in node.setdefault("next", []):
+                        node["next"].append(target)
+    return {"nodes": nodes, "node_types": types, "node_labels": labels}, lines, partial, raw_labels
 
 
 def parse_mermaid(mermaid_str: str) -> dict:
-    """Parse a Mermaid graph string into a structured node dictionary.
-
-    Returns a dict with keys:
-      - nodes: {name: {next: [...], branches: {...}, error: "...", delegate_to: "..."}}
-      - node_types: {name: "process"|"decision"|"end"|"delegate"}
-      - node_labels: {name: "display text"}
-    """
-    nodes = {}
-    node_types = {}
-    node_labels = {}
-    delegate_targets = {}
-
-    lines = mermaid_str.strip().split("\n")
-
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("graph ") or line.startswith("%%"):
-            continue
-
-        # Split line by edge patterns: -->|label|, -->, -.->
-        parts = re.split(r'\s*(-->\|[^|]+\||-->|-\.->)\s*', line)
-
-        if len(parts) < 3:
-            # Standalone node definition (no edge)
-            _extract_node_shape(parts[0].strip(), node_types, node_labels, delegate_targets)
-            continue
-
-        # Process edge pairs: (source, edge, target, edge, target, ...)
-        for i in range(0, len(parts) - 2, 2):
-            src_raw = parts[i].strip()
-            edge_raw = parts[i + 1].strip()
-            dst_raw = parts[i + 2].strip()
-
-            src = _extract_node_shape(src_raw, node_types, node_labels, delegate_targets)
-            dst = _extract_node_shape(dst_raw, node_types, node_labels, delegate_targets)
-
-            if not src or not dst:
-                continue
-
-            if src not in nodes:
-                nodes[src] = {}
-            if dst not in nodes:
-                nodes[dst] = {}
-
-            if "-.->" in edge_raw:
-                # Error edge
-                nodes[src]["error"] = dst
-            elif "|" in edge_raw:
-                # Branch edge
-                label = re.search(r'\|(.+?)\|', edge_raw).group(1)
-                nodes[src].setdefault("branches", {})[label] = dst
-            else:
-                # Normal edge (next)
-                nodes[src].setdefault("next", [])
-                if dst not in nodes[src]["next"]:
-                    nodes[src]["next"].append(dst)
-
-    # Add delegate_to to nodes
-    for name, target in delegate_targets.items():
-        if name in nodes:
-            nodes[name]["delegate_to"] = target
-
-    return {
-        "nodes": nodes,
-        "node_types": node_types,
-        "node_labels": node_labels,
-    }
+    """Parse the supported Mermaid subset; check() reports unsupported lines."""
+    return _parse_mermaid(mermaid_str)[0]
 
 
 def infer_node_type(node: dict) -> str:
-    """Infer node behavior from its parsed structure.
-
-    Priority order (highest to lowest):
-      1. {} (empty)        → end
-      2. has branches      → decision
-      3. has delegate_to   → delegate
-      4. has next (2+)     → fork
-      5. has next (1)      → process
-    """
+    """Delegate takes precedence over its return-time conditional branches."""
     if not node:
         return "end"
-    if "branches" in node:
-        return "decision"
     if "delegate_to" in node:
         return "delegate"
+    if "branches" in node:
+        return "decision"
+    if "wait_for" in node:
+        return "join"
     if "next" in node:
         return "fork" if len(node["next"]) > 1 else "process"
     return "end"
 
 
-# ── Load & Validate ─────────────────────────────────────────
+def _pointer(value):
+    return _unicode_scalar(str(value), "_AISOP_LOCATION_UNICODE").replace("~", "~0").replace("/", "~1")
+
+
+def list_graphs(data):
+    """List graph declarations in input member order without executing them."""
+    graphs = data[1]["content"]["aisop"]
+    return [{"name": name, "format": "mermaid" if isinstance(body, str) else "jsonflow"}
+            for name, body in graphs.items()]
+
+
+def check(data, resolver=None, standalone=False):
+    """Check only visited structure, not an arbitrary object's entire payload."""
+    try:
+        return _check_structure(data, resolver, standalone)
+    except ValueError as error:
+        if getattr(error, "code", None) != "_AISOP_LOCATION_UNICODE":
+            raise
+        return [{"severity": "ERROR", "code": "AISOP_E_SUBGRAPH_SHAPE",
+                 "location": "/", "message": "Invalid Unicode in diagnostic key"}]
+
+
+def _check_structure(data, resolver=None, standalone=False):
+    """Check structure and local calls only; never load or execute a target."""
+    issues = []
+
+    def issue(suffix, location, message, warning=False):
+        severity = "WARNING" if warning else "ERROR"
+        prefix = "AISOP_W_SUBGRAPH_" if warning else "AISOP_E_SUBGRAPH_"
+        issues.append({"severity": severity, "code": prefix + suffix,
+                       "location": location, "message": message})
+
+    def shape(location, message):
+        issue("SHAPE", location, message)
+
+    if not isinstance(data, list) or len(data) != 2 or not all(isinstance(x, dict) for x in data):
+        shape("/", "Expected exactly two message objects")
+        return issues
+    for i, role in enumerate(("system", "user")):
+        if data[i].get("role") != role or not isinstance(data[i].get("content"), dict):
+            shape("/" + role, "Expected role and object content")
+    if issues:
+        return issues
+    meta, user = data[0]["content"], data[1]["content"]
+    for key in ("protocol", "axiom_0", "id", "name", "version", "flow_format"):
+        if not isinstance(meta.get(key), str):
+            shape("/system/content/" + key, "Required string field")
+    if meta.get("axiom_0") != "Human_Sovereignty_and_Wellbeing":
+        shape("/system/content/axiom_0", "Invalid foundation value")
+    if meta.get("flow_format") not in ("mermaid", "jsonflow", "hybrid"):
+        issue("FORMAT", "/system/content/flow_format", "Required graph format")
+    if "params" in meta:
+        if not isinstance(meta["params"], dict):
+            issue("PARAMS", "/system/content/params", "Expected simple parameter type declarations")
+        else:
+            for name, value in meta["params"].items():
+                if (not isinstance(name, str) or not IDENTIFIER.fullmatch(name)
+                        or name in ("null", "true", "false")
+                        or not isinstance(value, str)
+                        or value not in ("string", "number", "boolean", "array", "object", "null")):
+                    issue("PARAMS", "/system/content/params/" + _pointer(name), "Invalid parameter name or type")
+    if not isinstance(user.get("instruction"), str):
+        shape("/user/content/instruction", "Required string field")
+    graphs, functions = user.get("aisop"), user.get("functions")
+    if not isinstance(graphs, dict) or "main" not in graphs:
+        shape("/user/content/aisop", "Expected graph object containing main")
+    if not isinstance(functions, dict):
+        shape("/user/content/functions", "Expected function object")
+    if not isinstance(graphs, dict) or "main" not in graphs or not isinstance(functions, dict):
+        return issues
+
+    # Check lexical validity before collecting potential call references.
+    steps = {}
+    for name, function in functions.items():
+        loc = "/user/content/functions/" + _pointer(name)
+        if not IDENTIFIER.fullmatch(name):
+            issue("NAME", loc, "Invalid function name")
+        if not isinstance(function, dict):
+            shape(loc, "Expected function object")
+            continue
+        steps[name] = []
+        valid_steps = []
+        for key, value in function.items():
+            if key in RESERVED_KEYS:
+                if key in ("join", "map", "on_error") and not isinstance(value, dict):
+                    shape(loc + "/" + key, "Expected configuration object")
+                if key == "execute_mode" and value not in ("inline", "agent"):
+                    issue("EXECUTE_MODE", loc + "/" + key, "Expected inline or agent")
+                continue
+            if not STEP_KEY.fullmatch(key):
+                issue("FUNCTION_KEY", loc + "/" + _pointer(key), "Expected stepN or a reserved function key")
+                continue
+            if not isinstance(value, str) or not value.strip(_WS):
+                issue("STEP_VALUE", loc + "/" + key, "Expected a nonempty string step")
+                continue
+            valid_steps.append((key, value))
+        for key, value in sorted(valid_steps, key=lambda item: (len(item[0][4:]), item[0][4:])):
+            call = parse_call(value)
+            if call:
+                steps[name].append((key, call))
+            elif _bad_call(value):
+                issue("CALL_SYNTAX", loc + "/" + _pointer(key), "Expected one whole RUN step")
+
+    details, partial_any, reuse = {}, False, {}
+    for graph, body in graphs.items():
+        loc = "/user/content/aisop/" + _pointer(graph)
+        if not IDENTIFIER.fullmatch(graph):
+            issue("NAME", loc, "Invalid graph name")
+        actual = "mermaid" if isinstance(body, str) else "jsonflow"
+        if not isinstance(body, (str, dict)):
+            shape(loc, "Expected Mermaid string or JSON flow object")
+            details[graph] = None
+            continue
+        if meta.get("flow_format") in ("mermaid", "jsonflow") and actual != meta["flow_format"]:
+            issue("FORMAT", loc, "Graph does not match flow_format")
+        if isinstance(body, str):
+            parsed, source_lines, partial, raw_labels = _parse_mermaid(body)
+            nodes, types = parsed["nodes"], parsed["node_types"]
+            for line in partial:
+                issue("PARSE_PARTIAL", loc + "/line/" + str(line), "Unsupported Mermaid line", True)
+            partial_any = partial_any or bool(partial)
+        else:
+            nodes, types, source_lines, partial = body, {}, {}, []
+        if not nodes:
+            shape(loc, "Graph has no supported nodes")
+            details[graph] = None
+            continue
+        details[graph] = (nodes, loc, source_lines, bool(partial))
+        entry = next(iter(nodes))
+        entry_known = not partial or (source_lines and min(partial) > source_lines[entry])
+        incoming = {name: set() for name in nodes}
+        for name, node in nodes.items():
+            nl = loc + ("/line/" + str(source_lines[name]) + "/node" if isinstance(body, str) else "") + "/" + _pointer(name)
+            if not IDENTIFIER.fullmatch(name):
+                issue("NAME", nl, "Invalid node name")
+            if not isinstance(node, dict):
+                shape(nl, "Expected node object")
+                continue
+            if isinstance(body, str) and parsed["node_labels"].get(name, "").startswith("RUN "):
+                issue("CALL_SYNTAX", nl, "RUN belongs in a function step, not a node label")
+            if (isinstance(body, str) and types.get(name) == "process"
+                    and _unquote(raw_labels.get(name, "").strip(_WS + _BAD_WS)).strip(_WS + _BAD_WS).startswith("aisop.")):
+                issue("CALL_SYNTAX", nl, "Delegate label requires exactly aisop.<name>")
+            end = types.get(name) == "end" if isinstance(body, str) else not node
+            end_known = (name in types or bool(node)) if isinstance(body, str) else (
+                not node or any(key in node for key in ("next", "branches", "error", "delegate_to", "wait_for")))
+            reuse.setdefault(name, []).append((name == entry if entry_known else None,
+                                               end if end_known else None))
+            targets = []
+            for key in ("next", "wait_for"):
+                if key in node:
+                    if not isinstance(node[key], list):
+                        shape(nl + "/" + key, "Expected target list")
+                    else:
+                        targets.extend((v, nl + "/" + key + "/" + str(i), key == "next")
+                                       for i, v in enumerate(node[key]))
+            if "branches" in node:
+                if not isinstance(node["branches"], dict):
+                    shape(nl + "/branches", "Expected branch object")
+                else:
+                    targets.extend((v, nl + "/branches/" + _pointer(k), True)
+                                   for k, v in node["branches"].items())
+            if "error" in node:
+                targets.append((node["error"], nl + "/error", False))
+            function = functions.get(name, {})
+            if isinstance(function, dict) and isinstance(function.get("on_error"), dict):
+                targets.extend((v, nl + "/functions/on_error/" + _pointer(k), False)
+                               for k, v in function["on_error"].items())
+            for target, tl, normal in targets:
+                if not isinstance(target, str):
+                    shape(tl, "Expected target name")
+                elif target not in nodes:
+                    if not partial:
+                        issue("LOCAL_EDGE", tl, "Target is not in the current graph")
+                elif normal:
+                    incoming[target].add(name)
+        details[graph] += (incoming,)
+
+    edges = {name: set() for name in graphs}
+    inbound = set()
+    for graph, info in details.items():
+        if info is None:
+            continue
+        nodes, loc, source_lines, partial, incoming = info
+        for name, node in nodes.items():
+            if not isinstance(node, dict):
+                continue
+            nl = loc + ("/line/" + str(source_lines[name]) + "/node" if source_lines else "") + "/" + _pointer(name)
+            function = functions.get(name, {})
+            if not isinstance(function, dict):
+                continue
+            delegate = node.get("delegate_to")
+            if "delegate_to" in node and (not isinstance(delegate, str) or not IDENTIFIER.fullmatch(delegate)):
+                issue("CALL_SYNTAX", nl + "/delegate_to", "Delegate requires a bare graph name")
+                delegate = None
+            join = "join" in function and len(incoming.get(name, ())) > 1
+            mapped = "map" in function
+            if delegate and (join or mapped) or join and mapped:
+                issue("CONFLICT", nl, "Delegate, active join and map are mutually exclusive")
+            if mapped:
+                iterator = function.get("map", {}).get("iterator") if isinstance(function.get("map"), dict) else None
+                if iterator and steps.get(iterator):
+                    issue("PARSE_PARTIAL", nl, "Indirect map calls are not expanded", True)
+                    partial_any = True
+            calls = [(key, call) for key, call in steps.get(name, ())]
+            if delegate and not any(call["target"] == delegate for _, call in calls):
+                calls.append(("delegate_to", {"target": delegate, "store": None}))
+            for key, call in calls:
+                cl = nl + ("/delegate_to" if key == "delegate_to" else "/functions/" + _pointer(key))
+                target = call["target"]
+                if target == "main":
+                    issue("CALL_MAIN", cl, "main is only the top-level entry")
+                elif target in graphs:
+                    if details.get(target) is None:
+                        issue("TARGET", cl, "Local target is invalid; no external fallback")
+                    else:
+                        edges[graph].add(target)
+                        inbound.add(target)
+                elif standalone:
+                    issue("TARGET", cl, "Target missing in standalone program")
+                elif resolver is None:
+                    issue("RESOLVER", cl, "No consumer resolver; target not verified", True)
+                else:
+                    try:
+                        found = resolver(target)
+                        if type(found) is not bool:
+                            issue("RESOLVER", cl, "Resolver must return a boolean")
+                        elif not found:
+                            issue("TARGET", cl, "Consumer reports target missing")
+                    except Exception:
+                        issue("RESOLVER", cl, "Consumer resolver raised an exception")
+
+    # An edge belongs to a cycle iff its target can reach its source.
+    for graph, targets in edges.items():
+        for target in sorted(targets):
+            pending, seen = [target], set()
+            while pending:
+                current = pending.pop()
+                if current == graph:
+                    issue("CYCLE", "/user/content/aisop/" + _pointer(graph) + "/calls/" + _pointer(target),
+                          "Local subgraph call cycle")
+                    break
+                if current not in seen:
+                    seen.add(current)
+                    pending.extend(edges.get(current, ()))
+    if not partial_any:
+        for graph in graphs:
+            if graph != "main" and graph not in inbound:
+                issue("UNUSED", "/user/content/aisop/" + _pointer(graph), "No valid local incoming call", True)
+    for name, roles in reuse.items():
+        if len(roles) > 1 and not all(x[0] is True for x in roles) and not all(x[1] is True for x in roles):
+            if all(x[0] is not None and x[1] is not None for x in roles):
+                issue("NODE_REUSE", "/user/content/aisop/node_reuse/" + _pointer(name),
+                      "Shared function has non-entry/non-end roles", True)
+            else:
+                issue("PARSE_PARTIAL", "/user/content/aisop/node_reuse/" + _pointer(name),
+                      "Shared node roles cannot be established", True)
+    return sorted(issues, key=lambda x: (x["location"].encode("utf-8"), x["code"], x["severity"]))
+
+
+_MAX_NUMBER = 9007199254740991
+
+
+def _reject(code):
+    error = ValueError(code)
+    error.code = code
+    raise error
+
+
+def _unicode_scalar(value, code):
+    try:
+        return value.encode("utf-16-le", "surrogatepass").decode("utf-16-le")
+    except UnicodeError:
+        _reject(code)
+
+
+def _number_in_range(value):
+    if type(value) is int:
+        return abs(value) <= _MAX_NUMBER
+    return math.isfinite(value) and abs(value) <= _MAX_NUMBER
+
+
+def _fresh_json_tree(data):
+    # Private entry: only a new standard-decoder tree, never caller objects.
+    pending = [data]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str):
+            _unicode_scalar(value, "AISOP_E_JSON_INPUT")
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                _unicode_scalar(key, "AISOP_E_JSON_INPUT")
+                pending.append(child)
+        elif isinstance(value, list):
+            pending.extend(value)
+        elif type(value) in (int, float) and not _number_in_range(value):
+            _reject("AISOP_E_JSON_INPUT")
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            _reject("AISOP_E_JSON_INPUT")
+        result[key] = value
+    return result
+
 
 def load(path: str) -> list:
-    """Load an .aisop.json file and return parsed JSON."""
-    with open(path, encoding="utf-8-sig") as f:
-        data = json.load(f)
+    """Strict original-file input, then ordinary AISOP structural validation."""
+    raw = Path(path).read_bytes()  # Keep native file IO errors outside input mapping.
+    try:
+        text = raw.decode("utf-8-sig")
+        data = json.loads(text, object_pairs_hook=_unique_json_object,
+                          parse_constant=lambda _: _reject("AISOP_E_JSON_INPUT"))
+    except (UnicodeError, ValueError, OverflowError, RecursionError):
+        _reject("AISOP_E_JSON_INPUT")
+    _fresh_json_tree(data)
     validate(data)
     return data
 
 
 def validate(data: list) -> None:
-    """Validate AISOP V1.0.0 structure. Raises ValueError on invalid input."""
-    if not isinstance(data, list) or len(data) != 2:
-        raise ValueError("AISOP file must be a JSON array with exactly 2 elements")
-
-    system, user = data
-    if system.get("role") != "system":
-        raise ValueError("First element must have role='system'")
-    if user.get("role") != "user":
-        raise ValueError("Second element must have role='user'")
-
-    sc = system.get("content", {})
-    for field in ("protocol", "axiom_0", "id", "name", "version", "flow_format"):
-        if field not in sc:
-            raise ValueError(f"system.content missing required field: {field}")
-
-    if sc.get("axiom_0") != "Human_Sovereignty_and_Wellbeing":
-        raise ValueError('axiom_0 must be "Human_Sovereignty_and_Wellbeing"')
-
-    if sc.get("flow_format") not in ("mermaid", "jsonflow", "hybrid"):
-        raise ValueError('flow_format must be "mermaid", "jsonflow", or "hybrid"')
-
-    uc = user.get("content", {})
-    for field in ("instruction", "aisop", "functions"):
-        if field not in uc:
-            raise ValueError(f"user.content missing required field: {field}")
-    if "main" not in uc["aisop"]:
-        raise ValueError("aisop must contain a 'main' task")
-
-    # Validate each task — Mermaid string or JSON flow object
-    for task_name, task_body in uc["aisop"].items():
-        if isinstance(task_body, str):
-            # Mermaid format
-            parsed = parse_mermaid(task_body)
-            if not parsed["nodes"]:
-                raise ValueError(f"Task '{task_name}' has no parseable nodes")
-        elif isinstance(task_body, dict):
-            # JSON flow format
-            if not task_body:
-                raise ValueError(f"Task '{task_name}' is empty")
-        else:
-            raise ValueError(f"Task '{task_name}' must be Mermaid string or JSON flow object, got {type(task_body).__name__}")
+    """Preserve the original API: warnings do not raise ValueError."""
+    errors = [item for item in check(data) if item["severity"] == "ERROR"]
+    if errors:
+        raise ValueError(errors[0]["code"] + " at " + errors[0]["location"] + ": " + errors[0]["message"])
 
 
 # ── Metadata ────────────────────────────────────────────────
@@ -233,10 +622,10 @@ def _infer_json_flow_type(node: dict) -> str:
     """Infer node type from JSON flow structure."""
     if not node:
         return "end"
-    if "branches" in node:
-        return "decision"
     if "delegate_to" in node:
         return "delegate"
+    if "branches" in node:
+        return "decision"
     if "wait_for" in node:
         return "join"
     if "next" in node:
@@ -412,78 +801,212 @@ def _find_operator_outside_quotes(expr: str, op: str) -> int:
     return -1
 
 
-def eval_expression(expr: str, context: dict | None = None) -> object:
-    """Evaluate a deterministic expression (§6.11).
+def _expression_string(source, start):
+    quote, pos, encoded = source[start], start + 1, ['"']
+    while pos < len(source):
+        char = source[pos]
+        if char == quote:
+            encoded.append('"')
+            try:
+                value = json.loads("".join(encoded))
+            except ValueError:
+                _reject("AISOP_E_EXPR_SYNTAX")
+            return _unicode_scalar(value, "AISOP_E_EXPR_SYNTAX"), pos + 1
+        if ord(char) < 32:
+            _reject("AISOP_E_EXPR_SYNTAX")
+        if char == "\\":
+            if pos + 1 >= len(source):
+                _reject("AISOP_E_EXPR_SYNTAX")
+            escape = source[pos + 1]
+            if escape == "'" and quote == "'":
+                encoded.append("'")
+                pos += 2
+                continue
+            if escape == "u":
+                digits = source[pos + 2:pos + 6]
+                if len(digits) != 4 or not re.fullmatch("[0-9A-Fa-f]{4}", digits):
+                    _reject("AISOP_E_EXPR_SYNTAX")
+                encoded.append(source[pos:pos + 6])
+                pos += 6
+                continue
+            if escape not in '"\\/bfnrt':
+                _reject("AISOP_E_EXPR_SYNTAX")
+            encoded.append(source[pos:pos + 2])
+            pos += 2
+            continue
+        encoded.append('\\"' if char == '"' else char)
+        pos += 1
+    _reject("AISOP_E_EXPR_SYNTAX")
 
-    Supports: ==, !=, >, <, >=, <=, &&, ||, !, null checks, member access.
-    Does NOT go through LLM. Respects quoted string boundaries.
 
-    Args:
-        expr: expression string (e.g. 'count > 0', 'a > 1 && b < 10')
-        context: variable context dict
+def _expression_value(value):
+    if value is None:
+        return "null", None
+    if type(value) is bool:
+        return "boolean", value
+    if type(value) in (int, float):
+        if not _number_in_range(value):
+            _reject("AISOP_E_EXPR_RANGE")
+        return "number", value
+    if type(value) is str:
+        return "string", _unicode_scalar(value, "AISOP_E_EXPR_TYPE")
+    if type(value) is dict:
+        return "object", value
+    if type(value) is list:
+        return "array", value
+    _reject("AISOP_E_EXPR_TYPE")
 
-    Returns:
-        Evaluation result (typically bool for comparisons)
 
-    Raises:
-        ValueError: if expression is invalid or references undefined variables
-    """
+def _expression_tree(source):
+    nodes, values, operators = [], [], []
+    precedence = {"||": 1, "&&": 2, "==": 3, "!=": 3,
+                  "<": 3, ">": 3, "<=": 3, ">=": 3}
+
+    def reduce_operator():
+        if len(values) < 2 or not operators:
+            raise RuntimeError("Expression parser invariant")
+        right, left = values.pop(), values.pop()
+        nodes.append((operators.pop(), left, right))
+        values.append(len(nodes) - 1)
+
+    pos, operand, compared = 0, True, False
+    while pos < len(source):
+        if source[pos] in _WS:
+            pos += 1
+            continue
+        if operand:
+            bangs = 0
+            while pos < len(source) and (source[pos] == "!" or source[pos] in _WS):
+                if source[pos] == "!":
+                    bangs += 1
+                pos += 1
+            if pos >= len(source):
+                _reject("AISOP_E_EXPR_SYNTAX")
+            char = source[pos]
+            if char in ("'", '"'):
+                value, pos = _expression_string(source, pos)
+                node = ("literal", value)
+            elif char in "-0123456789":
+                match = re.match(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?", source[pos:])
+                if not match:
+                    _reject("AISOP_E_EXPR_SYNTAX")
+                token = match[0]
+                value = float(token)
+                if not _number_in_range(value):
+                    _reject("AISOP_E_EXPR_RANGE")
+                node, pos = ("literal", value), pos + len(token)
+            else:
+                match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", source[pos:])
+                if not match:
+                    _reject("AISOP_E_EXPR_SYNTAX")
+                name, pos = match[0], pos + len(match[0])
+                if name in ("null", "true", "false"):
+                    node = ("literal", {"null": None, "true": True, "false": False}[name])
+                else:
+                    path = [name]
+                    while pos < len(source) and source[pos] == ".":
+                        match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", source[pos + 1:])
+                        if not match:
+                            _reject("AISOP_E_EXPR_SYNTAX")
+                        path.append(match[0])
+                        pos += len(match[0]) + 1
+                    node = ("path", path)
+            nodes.append(node)
+            index = len(nodes) - 1
+            for _ in range(bangs):
+                nodes.append(("!", index))
+                index = len(nodes) - 1
+            values.append(index)
+            operand = False
+        else:
+            match = re.match(r"!=|==|>=|<=|&&|\|\||[<>]", source[pos:])
+            if not match:
+                _reject("AISOP_E_EXPR_SYNTAX")
+            op = match[0]
+            if precedence[op] == 3:
+                if compared:
+                    _reject("AISOP_E_EXPR_SYNTAX")
+                compared = True
+            else:
+                compared = False
+            while operators and precedence[operators[-1]] >= precedence[op]:
+                reduce_operator()
+            operators.append(op)
+            pos += len(op)
+            operand = True
+    if operand:
+        _reject("AISOP_E_EXPR_SYNTAX")
+    while operators:
+        reduce_operator()
+    if len(values) != 1:
+        raise RuntimeError("Expression parser invariant")
+    return nodes, values[0]
+
+
+def eval_expression(expr: str, context: dict | None = None) -> bool:
+    """Evaluate only the shared boolean grammar, with stable reason codes."""
+    if not isinstance(expr, str):
+        _reject("AISOP_E_EXPR_TYPE")
     if context is None:
         context = {}
-
-    expr = expr.strip()
-
-    # Handle member access: result.exit_code -> context resolution
-    def resolve_var(name: str) -> object:
-        parts = name.strip().split(".")
-        obj = context
-        for part in parts:
-            if isinstance(obj, dict) and part in obj:
-                obj = obj[part]
+    if type(context) is not dict:
+        _reject("AISOP_E_EXPR_TYPE")
+    nodes, root = _expression_tree(expr)
+    results, pending = {}, [(root, 0)]
+    while pending:
+        index, phase = pending.pop()
+        node, op = nodes[index], nodes[index][0]
+        if op == "literal":
+            results[index] = _expression_value(node[1])
+        elif op == "path":
+            value = context
+            for name in node[1]:
+                if type(value) is not dict:
+                    _reject("AISOP_E_EXPR_TYPE")
+                if name not in value:
+                    _reject("AISOP_E_EXPR_UNDEFINED")
+                value = value[name]
+            results[index] = _expression_value(value)
+        elif phase == 0:
+            pending.extend(((index, 1), (node[1], 0)))
+        elif phase == 1:
+            kind, left = results[node[1]]
+            if op == "!":
+                if kind != "boolean":
+                    _reject("AISOP_E_EXPR_TYPE")
+                results[index] = "boolean", not left
+            elif op in ("&&", "||") and kind != "boolean":
+                _reject("AISOP_E_EXPR_TYPE")
+            elif (op == "&&" and not left) or (op == "||" and left):
+                results[index] = "boolean", left
             else:
-                raise ValueError(f"Undefined variable: {name}")
-        return obj
-
-    def resolve_token(token: str) -> object:
-        token = token.strip()
-        if _is_literal(token):
-            return _parse_literal(token)
-        return resolve_var(token)
-
-    def eval_comparison(sub_expr: str) -> object:
-        """Evaluate a single comparison (no &&/||)."""
-        sub_expr = sub_expr.strip()
-        # Handle unary NOT: !var
-        if sub_expr.startswith("!"):
-            inner = sub_expr[1:].strip()
-            return not eval_comparison(inner)
-        for op in ("!=", "==", ">=", "<=", ">", "<"):
-            idx = _find_operator_outside_quotes(sub_expr, op)
-            if idx != -1:
-                left = sub_expr[:idx]
-                right = sub_expr[idx + len(op):]
-                left_val = resolve_token(left)
-                right_val = resolve_token(right)
-                if op == "!=": return left_val != right_val
-                if op == "==": return left_val == right_val
-                if op == ">=": return left_val >= right_val
-                if op == "<=": return left_val <= right_val
-                if op == ">":  return left_val > right_val
-                if op == "<":  return left_val < right_val
-        # Single token — resolve as truthy/falsy
-        return bool(resolve_token(sub_expr))
-
-    # Handle || (lowest precedence) — split outside quotes only
-    parts = _split_outside_quotes(expr, "||")
-    if parts is not None:
-        return any(eval_expression(p.strip(), context) for p in parts)
-
-    # Handle && (higher precedence than ||) — split outside quotes only
-    parts = _split_outside_quotes(expr, "&&")
-    if parts is not None:
-        return all(eval_expression(p.strip(), context) for p in parts)
-
-    return eval_comparison(expr)
+                pending.extend(((index, 2), (node[2], 0)))
+        else:
+            left_kind, left = results[node[1]]
+            right_kind, right = results[node[2]]
+            if op in ("&&", "||"):
+                if right_kind != "boolean":
+                    _reject("AISOP_E_EXPR_TYPE")
+                value = right
+            elif op in ("==", "!="):
+                if left_kind != right_kind:
+                    value = False
+                elif left_kind in ("array", "object"):
+                    _reject("AISOP_E_EXPR_TYPE")
+                else:
+                    value = left == right
+                if op == "!=":
+                    value = not value
+            else:
+                if left_kind != "number" or right_kind != "number":
+                    _reject("AISOP_E_EXPR_TYPE")
+                value = {"<": lambda: left < right, ">": lambda: left > right,
+                         "<=": lambda: left <= right, ">=": lambda: left >= right}[op]()
+            results[index] = "boolean", value
+    kind, value = results[root]
+    if kind != "boolean":
+        _reject("AISOP_E_EXPR_TYPE")
+    return value
 
 
 def _is_literal(token: str) -> bool:

@@ -21,11 +21,11 @@ AISOP must serve two equally important consumers: **humans** (visual review of p
 AISOP defines **two equivalent representations** with bidirectional translation:
 
 1. **Mermaid graph** (primary, in `aisop.main` and `aisop.<sub>` fields) — human-friendly, GitHub renders inline
-2. **JSON Flow graph** (alternative, in `flow.main` and `flow.<sub>` fields) — machine-direct, no parser needed
+2. **JSON Flow graph** (alternative, in `aisop.main` and `aisop.<sub>` fields) — machine-direct, no parser needed
 
 Both representations carry the **same semantic content**. Implementations MUST accept either form and produce identical execution behavior.
 
-The primary format identifier is `flow_format: "mermaid"` or `flow_format: "json"` in the AISOP file metadata.
+The primary format identifier is `flow_format: "mermaid"` or `flow_format: "jsonflow"` in the AISOP file metadata.
 
 ## Rationale
 
@@ -53,7 +53,11 @@ The primary format identifier is `flow_format: "mermaid"` or `flow_format: "json
 
 ### Neutral
 
-- The reference Python and JavaScript implementations both default to Mermaid input but produce JSON Flow as the canonical internal representation
+- The reference Python and JavaScript implementations analyze the supported Mermaid subset into node, type and label records; they do not provide a complete bidirectional Mermaid/JSON Flow converter
+
+## Current Reference Implementation Scope (2026-11-15)
+
+The decision above describes intended control-flow equivalence, not identical generated content or external side effects. The current libraries load, inspect, check and build prompts; finite parser coverage is not full Mermaid support, a round-trip conversion proof or a business-flow executor. Runtime behavior and human confirmation require a conformant execution implementation.
 
 ## Alternatives Considered
 
@@ -71,9 +75,9 @@ Rejected for excessive complexity. BPMN serves business process modeling with fo
 
 ## References
 
-- Specification: `specification/aisop-spec.md` §Mermaid Parsing Rules, §JSON Flow Schema
-- Performance comparison: `docs/performance-mermaid-vs-jsonflow.md`
-- Format comparison: `docs/comparison-mermaid-vs-jsonflow.md`
+- Specification: `specification/aisop-spec.md` §4.2 (Mermaid Format), §4.3 (JSON Flow Format)
+- Performance comparison: `docs/topics/performance-mermaid-vs-jsonflow.md`
+- Format comparison: `docs/topics/comparison-mermaid-vs-jsonflow.md`
 
 ---
 

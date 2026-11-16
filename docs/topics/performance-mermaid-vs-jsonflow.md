@@ -1,10 +1,10 @@
 # Performance: Mermaid vs JSON Flow
 
-## Token Count Comparison
+## Illustrative Representations
 
-The same flow expressed in both formats:
+The same flow expressed in both formats below is a representation-only illustration, not a measured benchmark or a standalone AISOP program. The JSON example shows a graph member.
 
-**Mermaid — ~40 tokens:**
+**Mermaid:**
 
 ```
 graph TD
@@ -14,7 +14,7 @@ graph TD
     N4 --> N2
 ```
 
-**JSON Flow — ~60 tokens:**
+**JSON Flow graph member:**
 
 ```json
 "main": {
@@ -25,37 +25,39 @@ graph TD
 }
 ```
 
-Mermaid uses roughly **half the tokens** for the same flow definition. Fewer tokens = faster input processing + lower cost.
+Token counts depend on the tokenizer, labels, workflow structure and serialization/formatting. Mermaid may be more compact for some flows, but this page provides no measured token, latency, cost or accuracy comparison and promises no universal saving.
 
 ## LLM Comprehension
 
-- Mermaid is a visual language with extensive presence in LLM training data. Branch relationships are immediately apparent.
-- JSON flow requires layer-by-layer parsing of `next`/`branches` fields to trace the execution path.
+- Model understanding of either notation depends on the model and task; training-data familiarity alone is not a correctness guarantee.
+- JSON Flow exposes `next`/`branches` explicitly, while Mermaid expresses edges visually. Validate generated definitions instead of treating fluent output as conformance.
 
-## When Mermaid Wins
+## When Mermaid May Fit
 
-- **Simple routing flows** — fewer tokens, more intuitive for LLMs
-- **Speed-sensitive scenarios** — lower latency due to compact representation
-- **Cost optimization** — fewer input tokens = lower API cost
-- **LLM-first workflows** — Mermaid is natively understood by LLMs
+- **Simple routing flows** — compact edge notation may be easier to review
+- **Size-sensitive scenarios** — measure the actual serialized input with the target tokenizer
+- **Cost evaluation** — compare actual provider input costs rather than assuming a fixed percentage
+- **Model-assisted authoring** — check the generated syntax and intended topology
 
-## When JSON Flow Wins
+## When JSON Flow May Fit
 
-- **Complex flows** (join, parallel, delegate, error routing) — JSON semantics are more precise; `wait_for` provides explicit join declarations
+- **Complex flows** (join, parallel, delegate, error routing) — explicit fields such as `wait_for` can aid structural inspection; both notations follow the same AISOP semantics
 - **Programmatic processing** — JSON can be directly parsed and validated by code; Mermaid requires string parsing
 - **Sub-tasks** — `delegate_to` and `wait_for` fields are more explicit than Mermaid node labels
-- **Strict validation** — JSON schema can enforce structure at the protocol level
+- **Structured validation** — object fields can be checked directly; structural validation alone does not prove runtime safety or human confirmation
 
 ## Conclusion
 
 | Scenario | Recommended | Reason |
 |----------|-------------|--------|
-| Simple routing / intent matching | Mermaid | Fewer tokens, faster, intuitive |
-| Complex multi-step workflows | JSON Flow | Precise semantics, no ambiguity |
-| Cost-sensitive deployments | Mermaid | ~50% fewer flow tokens |
+| Simple routing / intent matching | Consider Mermaid | Compact edge notation; check the actual program |
+| Complex multi-step workflows | Consider JSON Flow | Explicit structural fields; runtime semantics still matter |
+| Cost-sensitive deployments | Measure both | Tokenizer, serialization and workflow dependent |
 | Programmatic flow generation | JSON Flow | Native JSON, easy to build/validate |
 
 Both formats share the same function definitions and metadata. The choice depends on flow complexity and deployment priorities. Both can coexist in the same program.
+
+The reference libraries inspect a finite Mermaid subset and do not execute business flows or provide a complete bidirectional converter. Partial parsing or static success is not a runtime guarantee.
 
 ---
 

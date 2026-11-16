@@ -1,0 +1,82 @@
+[
+  {
+    "role": "system",
+    "content": {
+      "protocol": "AISOP V1.0.0",
+      "axiom_0": "Human_Sovereignty_and_Wellbeing",
+      "id": "subgraph_diagnosis",
+      "name": "Subgraph Diagnosis Example",
+      "version": "1.0.0",
+      "summary": "Offline structural example of peer subgraphs, delegation and node-local results",
+      "flow_format": "hybrid"
+    }
+  },
+  {
+    "role": "user",
+    "content": {
+      "instruction": "RUN aisop.main",
+      "user_input": "Review a short sample description.",
+      "aisop": {
+        "main": "graph TD\n    intake[Read] --> diagnose[aisop.diagnose]\n    diagnose --> reply[Reply]\n    reply --> end_node((End))",
+        "diagnose": "graph TD\n    gather_info[Gather] --> analyze[Analyze]\n    analyze --> diagnose_done((Done))",
+        "extract_keywords": {
+          "parse": {
+            "next": [
+              "rank"
+            ]
+          },
+          "rank": {
+            "next": [
+              "keywords_done"
+            ]
+          },
+          "keywords_done": {}
+        }
+      },
+      "functions": {
+        "intake": {
+          "step1": "Read user_input as the text to inspect",
+          "output_mapping": "request_text"
+        },
+        "diagnose": {
+          "step1": "Prepare the permitted context for the diagnosis subgraph"
+        },
+        "gather_info": {
+          "step1": "Make request_text available through the permitted program context",
+          "step2": "RUN aisop.extract_keywords -> keywords",
+          "step3": "Use the node-local keywords list to prepare evidence",
+          "output_mapping": "gathered_evidence"
+        },
+        "parse": {
+          "step1": "Extract candidate keywords from request_text",
+          "output_mapping": "keyword_candidates"
+        },
+        "rank": {
+          "step1": "Rank keyword_candidates by relevance and produce an ordered list",
+          "output_mapping": "keywords_output"
+        },
+        "keywords_done": {
+          "step1": "Return the ordered list in keywords_output as the extract_keywords business completion output"
+        },
+        "analyze": {
+          "step1": "Use gathered_evidence to produce a short diagnosis",
+          "context_filter": {
+            "include": [
+              "gathered_evidence"
+            ]
+          },
+          "output_mapping": "diagnosis_result"
+        },
+        "diagnose_done": {
+          "step1": "Return diagnosis_result as the diagnose business completion output"
+        },
+        "reply": {
+          "step1": "Prepare a response using diagnosis_result"
+        },
+        "end_node": {
+          "step1": "Present the final response before the main graph completes"
+        }
+      }
+    }
+  }
+]

@@ -10,7 +10,7 @@
       "summary": "Automated deployment with human confirmation, runtime assertions, and background tasks",
       "flow_format": "mermaid",
       "tools": [],
-      "params": { "environment": "production" },
+      "params": { "environment": "string" },
       "system_prompt": "{system_prompt}"
     }
   },
@@ -20,14 +20,14 @@
       "instruction": "RUN aisop.main",
       "user_input": "{user_input}",
       "aisop": {
-        "main": "graph TD\n    validate[Validate] --> test[Test]\n    test --> confirm{Confirm}\n    confirm -->|approved| deploy[Deploy]\n    confirm -->|rejected| abort((End))\n    deploy --> verify[Verify]\n    verify --> end_node((End))"
+        "main": "graph TD\n    validate[Validate] --> test[Test]\n    test --> confirm[Confirm]\n    confirm --> deploy[Deploy]\n    confirm -.-> abort((End))\n    deploy --> verify[Verify]\n    verify --> end_node((End))"
       },
       "functions": {
         "validate": {
           "step1": "sys.io.read('config.yaml') -> config_data",
           "step2": "sys.assert('config_data != null', 'Config file missing')",
           "step3": "sys.llm.classify(config_data, ['valid', 'invalid']) -> config_status",
-          "step4": "sys.assert('config_status == valid', 'Invalid configuration')",
+          "step4": "sys.assert('config_status == \"valid\"', 'Invalid configuration')",
           "step5": "sys.io.print('Configuration validated')"
         },
         "test": {
@@ -39,7 +39,7 @@
         },
         "confirm": {
           "step1": "sys.io.notify('All checks passed. Ready to deploy.')",
-          "step2": "sys.io.confirm('Deploy to production? This will affect live users.', options=['approved', 'rejected']) -> decision",
+          "step2": "sys.io.confirm('Deploy to production? This will affect live users.')",
           "step3": "sys.security.audit('Deploy decision received')",
           "on_error": {
             "confirm_rejected": "abort",
@@ -71,7 +71,7 @@
         },
         "abort": {
           "step1": "sys.io.notify('Deployment cancelled')",
-          "step2": "sys.security.audit('Deploy aborted by user')"
+          "step2": "sys.security.audit('Deployment aborted')"
         }
       }
     }

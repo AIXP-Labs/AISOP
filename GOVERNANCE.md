@@ -1,33 +1,33 @@
 # AISOP Ecosystem Governance
 
-The AI Standard Operating Protocol (AISOP) is the **format layer** of the AIXP protocol family. It defines the syntax and execution semantics of `.aisop.json` files — neutral, foundational, and unconcerned with application ethics or runtime behavior.
+The AI Standard Operating Protocol (AISOP) is the **format layer** of the AIXP protocol family. It independently defines the syntax and execution semantics of `.aisop.json` files, including Axiom 0 and confirmation requirements. It does not itself implement application governance, a sandbox or an execution service.
 
-## The Tripartite Chain
+## The Tripartite Chain as an Ecosystem View
 
-The AIXP protocol family operates on a strict separation of concerns across three authoritative domains. **All layers are licensed under Apache 2.0** for unified patent protection and ecosystem consistency. **This repository** (`AISOP-Protocol`) governs the aisop.dev Seed Layer.
+The following format, governance and execution roles describe an ecosystem division of responsibility, not a required dependency chain or exclusive list of implementations. **This repository** (`AISOP-Protocol`) maintains the aisop.dev format specification under Apache 2.0. Other projects govern their own contracts; they do not override AISOP syntax, execution semantics or Axiom 0.
 
 ### 1. The Seed Layer (`aisop.dev`) — *This repository*
 
 The origin of the format.
 
 - **Responsibility**: Defines the underlying `.aisop.json` language specification, Mermaid graph parsing rules, JSON Flow equivalence, the System/User execution model, and the `sys.*` system call family.
-- **Philosophy**: Neutral, static, foundational. Unconcerned with ethics, application logic, or runtime policy enforcement.
+- **Philosophy**: Foundational and host-neutral. Defines Axiom 0 and execution requirements while leaving application-specific policy and concrete enforcement to consumers and implementations.
 - **License**: Apache 2.0 — unified across the AIXP protocol family.
 
-### 2. The Authority Layer (`aiap.dev`)
+### 2. A Consuming Governance Protocol (`aiap.dev`)
 
-The source of governance and the steward of Axiom 0.
+A governance example within AIXP, not an authority above the AISOP specification.
 
-- **Responsibility**: Maintains the `AIAP_Protocol.md` structural specification, the `AIAP_Standard.*.aisop.json` quality gates, and enforces the Zero-Entropy and L0 isolation rules over AISOP files.
+- **Responsibility**: Maintains AIAP package structures and its own quality and governance rules for AISOP-based applications. AIAP and other consuming protocols must align with AISOP rather than redefine its base format.
 - **Philosophy**: Rigorous, uncompromising. Ensures that all compliant intelligence adheres to "Human Sovereignty and Wellbeing."
 - **License**: Apache 2.0.
 - **Repository**: [AIAP-Protocol](https://github.com/AIXP-Labs/AIAP)
 
-### 3. The Executor Layer (`soulbot.dev`)
+### 3. A Runtime and Hosting Project (`soulbot.dev`)
 
-The reference runtime environment.
+A runtime/hosting example in the ecosystem, not a prerequisite or sole executor for AISOP.
 
-- **Responsibility**: Instantiates AI agents, parses AISOP files, dispatches `sys.*` calls, manages memory, and enforces the `permissions` declared in AIAP contracts at runtime.
+- **Responsibility**: Hosts and orchestrates AISOP-based applications. Concrete parsing, dispatch, sandboxing, memory and permission enforcement belong to the chosen implementation and its contracts; this document does not certify an implementation or prescribe a particular execution service.
 - **Philosophy**: Secure, performant, sandboxed.
 - **License**: Apache 2.0.
 - **Repository**: [SoulBot](https://github.com/AIXP-Labs/SoulBot)
@@ -38,18 +38,18 @@ AISOP is the format layer. It defines:
 
 - **`.aisop.json` schema** — required fields, control flow constructs, error edges
 - **Mermaid graph parsing** — node types, edge semantics, sub-graph references
-- **JSON Flow equivalence** — bidirectional translation between Mermaid and JSON
+- **JSON Flow equivalence** — corresponding control-flow meaning of the supported Mermaid and JSON Flow forms; parser coverage and conversion capabilities are documented separately
 - **Step text classification** — `sys.*` calls, `RUN aisop.*` sub-tasks, natural language
 - **`sys.*` system calls** — 24 protocol-reserved primitives across 8 namespaces
 - **Deterministic expression engine** — `sys.assert` and conditional evaluation
-- **Return value syntax** — `-> variable_name` for `sys.*` results
+- **Return value syntax** — `-> variable_name` for `sys.*` and whole RUN results under the specification's node-local rules
 
 AISOP does **not** define:
 
-- Quality rules or compliance checks (that is AIAP's role)
-- Trust levels or permission boundaries (that is AIAP's role)
-- Runtime sandboxing or tool resolution (that is SoulBot's role)
-- Ethics enforcement beyond the immutable `sys.io.confirm` guarantee
+- Application/package quality rules beyond AISOP's own format conformance (consuming protocols may add them)
+- Application trust levels or package-specific permission models
+- A concrete runtime sandbox, tool resolver or exclusive executor
+- A complete application ethics-enforcement system; Axiom 0 and confirmation requirements remain part of AISOP
 
 ## Axiom 0 Immutability
 
@@ -75,13 +75,13 @@ The Axiom 0 immutability constraint supersedes all versioning rules.
 
 ## Protocol Steering
 
-The AIXP protocol family is maintained by AIXP Labs across the three domains:
+These project locations illustrate the roles above; no registration with another protocol or runtime is required to define an AISOP program:
 
 | Domain | Role | Scope |
 |--------|------|-------|
 | `aisop.dev` | **Format Steward** *(this repository)* | `.aisop.json` specification, field definitions, `sys.*` calls |
-| `aiap.dev` | Governance Steward | Protocol rules, quality standards, security model |
-| `soulbot.dev` | Runtime Steward | Reference implementation, tool resolution, execution |
+| `aiap.dev` | Consuming governance protocol | AIAP package rules, quality standards and security model |
+| `soulbot.dev` | Runtime/hosting example | Application hosting and implementation-specific orchestration |
 
 ### Decision Process
 

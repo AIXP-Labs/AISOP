@@ -16,6 +16,10 @@
 
 ---
 
+The following are topology fragments, not standalone two-message AISOP programs; some omit target definitions. See the reference directories for the complete subgraph example and specification §4.4 for call rules.
+
+Equivalent control-flow meaning does not guarantee identical model outputs or external side effects. The reference parser supports a finite Mermaid subset and does not provide a complete bidirectional converter or runtime execution proof.
+
 ## Side-by-Side
 
 ### 1. Sequential
@@ -114,7 +118,7 @@ graph TD
 }
 ```
 
-JSON Flow advantage: `wait_for` explicitly declares which nodes to wait for. In Mermaid, the visual convergence implies join behavior, but the explicit wait list is not available — join semantics come from the `join` key in functions.
+JSON Flow's `wait_for` can explicitly name predecessor nodes. In Mermaid, convergence is topology, not a join configuration by itself; the runtime merge/wait behavior comes from the applicable `join` configuration in functions. Both forms follow the same AISOP execution rules.
 
 ---
 
@@ -175,7 +179,7 @@ Sub-task (`validation`):
 
 Both support sub-task reuse. Mermaid expresses delegation via node label `aisop.<sub>`. JSON Flow uses the `delegate_to` field.
 
-Both formats also support step-level sub-task invocation: `RUN aisop.<sub>` in function step text.
+Both formats support whole `RUN aisop.<name>` steps, optionally with ` -> <variable>`, using functional identifiers. Without a same-target explicit step, prepare then call via label or bare delegate_to; otherwise each actually reached explicit step calls once and the label adds no call. Evaluate branches after return; keep routes local and propagate errors per §6.12. Static checks do not prove real execution, confirmation or returns.
 
 ---
 
@@ -236,14 +240,14 @@ Both have native error routing. Mermaid uses dashed edge `-.->`. JSON Flow uses 
 
 | Dimension | Mermaid | JSON Flow |
 |-----------|---------|-----------|
-| Purpose | Token-efficient visual flow | Precise structural definition |
-| Token count | ~40 tokens (flow only) | ~60 tokens (flow only) |
-| LLM comprehension | High — visual language in training data | Medium — requires JSON field parsing |
+| Purpose | Compact visual notation | Explicit structural fields |
+| Token count | Tokenizer, workflow and formatting dependent | Tokenizer, workflow and formatting dependent |
+| LLM comprehension | Model/task dependent; not benchmarked here | Model/task dependent; not benchmarked here |
 | Machine-readable | Requires Mermaid parser | Native JSON |
 | Error handling | `-.->` dashed edge + `on_error` | `error` field + `on_error` |
 | Parallel join | Visual convergence + `join` in functions | Explicit `wait_for` + `join` in functions |
 | Sub-task | `aisop.<sub>` node label + `RUN aisop.sub` | `delegate_to` field + `RUN aisop.sub` |
-| Visualization | Native Mermaid rendering | Can convert to Mermaid |
+| Visualization | Mermaid rendering for the supported notation | Needs a renderer/converter; not supplied as a full round-trip tool here |
 
 **Design principle**: Both formats share the same function definitions (§5) and metadata format (§2). The only difference is how the flow graph (§4) is expressed — Mermaid string vs JSON flow object. Both can coexist in the same program.
 

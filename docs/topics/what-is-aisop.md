@@ -12,7 +12,7 @@ Modern AI agents face three recurring problems:
 2. **Opacity** — When an agent loop fails, there is no structural record of what was supposed to happen
 3. **Non-portability** — Logic written for one runtime (Cursor, Claude Code, AutoGen, etc.) cannot be lifted to another
 
-AISOP addresses all three by giving AI programs a **structural definition** that any conformant runtime can execute identically.
+AISOP addresses all three by giving AI programs a **structural definition** with explicit control-flow semantics; conformant runtimes must implement those semantics, but model outputs and external side effects are not guaranteed identical.
 
 ---
 
@@ -23,7 +23,7 @@ An AISOP program is a single `.aisop.json` file containing:
 - A **flow graph** (Mermaid or JSON Flow) — the program's control structure
 - **Function definitions** — what each node does, step by step
 - **`sys.*` system calls** — protocol-reserved primitives for I/O, assertions, code execution, state management
-- **Sub-graph composition** — `aisop.<sub>` references for reusable building blocks
+- **Sub-graph composition** — functionally named peer graphs, complete `aisop.<name>` node labels, bare JSON delegate_to, or whole RUN steps (§4.4)
 
 ```mermaid
 graph TD
@@ -35,7 +35,7 @@ graph TD
     Save --> EndOk((Done))
 ```
 
-The above graph is **executable** — any AISOP-conformant runtime parses it, dispatches each node, and produces deterministic side effects.
+The graph above is a topology fragment, not a complete program. It needs both messages and function definitions; a display label is not a sys.io.confirm step. Reference inspection does not execute business operations or guarantee deterministic side effects.
 
 ---
 
@@ -50,8 +50,8 @@ The above graph is **executable** — any AISOP-conformant runtime parses it, di
 
 ## What AISOP Is Not
 
-- **Not a runtime** — That is [SoulBot](https://github.com/AIXP-Labs/SoulBot)'s job
-- **Not a governance framework** — That is [AIAP](https://github.com/AIXP-Labs/AIAP)'s job (quality rules, trust levels, compliance gates)
+- **Not a runtime** — Concrete execution belongs to a chosen conformant implementation; [SoulBot](https://github.com/AIXP-Labs/SoulBot) is one runtime/hosting project, not an AISOP dependency
+- **Not an application-governance framework** — Consuming protocols such as [AIAP](https://github.com/AIXP-Labs/AIAP) define their own quality, trust and compliance rules without overriding AISOP
 - **Not a sandbox** — Tool resolution and permission enforcement happen at the runtime layer
 - **Not a prompt template language** — AISOP defines program structure; prompt content is the program author's responsibility
 
@@ -61,7 +61,7 @@ The above graph is **executable** — any AISOP-conformant runtime parses it, di
 
 | Approach | What it provides | What AISOP adds |
 |----------|-----------------|----------------|
-| Free-form prompts | Maximum flexibility | Determinism + reproducibility |
+| Free-form prompts | Maximum flexibility | Explicit control-flow structure; no guarantee of identical model outputs or side effects |
 | LangGraph / AutoGen | Python-native agent loops | Portable, language-neutral format |
 | MCP | Tool invocation protocol | Program-level structure (MCP doesn't define multi-step flow) |
 | BPMN 2.0 | Business process modeling | AI-agent-specific primitives (`sys.*`), simpler syntax |
@@ -76,21 +76,36 @@ AISOP is **complementary** to most of these — for example, an AISOP program ca
 ### Minimal AISOP file
 
 ```json
-{
-  "protocol": "AISOP V1.0.0",
-  "version": "1.0.0",
-  "name": "hello",
-  "flow_format": "mermaid",
-  "aisop": {
-    "main": "graph TD\n    Start[Greet user] --> EndOk((Done))"
+[
+  {
+    "role": "system",
+    "content": {
+      "protocol": "AISOP V1.0.0",
+      "axiom_0": "Human_Sovereignty_and_Wellbeing",
+      "id": "hello",
+      "name": "Hello",
+      "version": "1.0.0",
+      "flow_format": "mermaid"
+    }
   },
-  "functions": {
-    "Start": {
-      "description": "Print a greeting",
-      "steps": ["sys.io.print('Hello, AISOP!')"]
+  {
+    "role": "user",
+    "content": {
+      "instruction": "RUN aisop.main",
+      "aisop": {
+        "main": "graph TD\n    Start[Greet user] --> EndOk((Done))"
+      },
+      "functions": {
+        "Start": {
+          "step1": "sys.io.print('Hello, AISOP!')"
+        },
+        "EndOk": {
+          "step1": "Finish the greeting"
+        }
+      }
     }
   }
-}
+]
 ```
 
 ### What a runtime does with this
@@ -101,7 +116,7 @@ AISOP is **complementary** to most of these — for example, an AISOP program ca
 4. Dispatch `sys.*` to the runtime's primitive handler
 5. Return when end-node reached
 
-The same `.aisop.json` runs identically in the [Python reference implementation](https://github.com/AIXP-Labs/AISOP/tree/main/reference/python) and the [JavaScript reference implementation](https://github.com/AIXP-Labs/AISOP/tree/main/reference/javascript).
+The [Python](https://github.com/AIXP-Labs/AISOP/tree/main/reference/python) and [JavaScript](https://github.com/AIXP-Labs/AISOP/tree/main/reference/javascript) references load, check, analyze and build prompts; they do not walk or execute the business flow described above. See specification §4.4 and example_subgraphs.aisop.json for composition; real return, error propagation and human gates require a conformant implementation.
 
 ---
 

@@ -17,6 +17,16 @@ AISOP 协议承认以下不可撤销的前提：
 
 ## 1. 文件格式
 
+输入字节必须是有效UTF-8；只兼容一次开头BOM，不接受两个。JSON语法严格：拒绝尾随数据、NaN/Infinity扩展及解码后的对象重复键。每个对象的键集合独立；转义与字面写法解码成同一键即重复，但不合并大小写或Unicode归一形式。
+
+所有解析后数字必须有限且绝对值不超过9007199254740991（2^53 - 1）。这是解析后数字规则，不承诺十进制精确性：binary64舍入可使1e-400成为0，-0与0比较相等。布尔不是数字。表达式数字字面量及实际读取的数值上下文同样遵守此边界（§6.11）。
+
+解码后的键和字符串必须由Unicode标量组成：拒绝孤立代理项，允许合法配对、非BMP字符及中文。字符串数据内部BOM须保留。不得删改数据或修改进程级解码、整数、深度限制。
+
+参考load API对上述输入失败抛出带code AISOP_E_JSON_INPUT的ValueError/Error。原生IO错误保留原身份；成功解码但结构不合法的AISOP仍抛既有SUBGRAPH错误，而不是JSON_INPUT。其私有数字/Unicode迭代遍历仅用于新解析的JSON树。
+
+check(data)只检查实际访问的结构；无法恢复源重复键，也不认证已解析宿主对象的所有载荷。访问到的非法诊断键在安全祖先/根位置返回SHAPE，而不是在位置编码时崩溃。本条不新增任意宿主对象或循环对象合规规则。
+
 AISOP 文件使用 `.aisop.json` 扩展名。有效文件是一个包含两个元素的 JSON 数组：
 
 ```json
@@ -61,10 +71,10 @@ AISOP 文件使用 `.aisop.json` 扩展名。有效文件是一个包含两个�
 | `version` | string | 是 | 语义化版本 |
 | `summary` | string | 否 | 一句话功能概述 |
 | `description` | string | 否 | 详细描述 |
-| `flow_format` | string | 是 | `"mermaid"`、`"jsonflow"` 或 `"hybrid"`。默认：`"hybrid"`。 |
+| `flow_format` | string | 是 | `"mermaid"`、`"jsonflow"` 或 `"hybrid"`。必填，无默认值。 |
 | `loading_mode` | string | 否 | `"normal"` = 完整加载程序，`"node"` = 按需加载函数，`"lite"` = AI 按需加载函数。默认：`"normal"` |
 | `tools` | string[] | 否 | 工具声明 |
-| `params` | object | 否 | 输入参数声明 |
+| `params` | object | 否 | 可选简单输入类型：string、number、boolean、array、object 或 null（类型名为字符串）；不是默认值或必填声明 |
 | `system_prompt` | string | 否 | 系统提示（支持变量替换） |
 
 ---
@@ -123,7 +133,7 @@ AISOP 文件使用 `.aisop.json` 扩展名。有效文件是一个包含两个�
 | `main` | 主任务（必填），执行入口 |
 | 其他键 | 子任务（可选），通过委派节点（见 §4.2）或步骤层 `RUN aisop.<sub>`（见 §5.2.1）调用 |
 
-每个任务中的第一个节点是入口节点。
+每个任务中的第一个节点是入口节点。图名、节点名遵循 §4.4；main 不能作为嵌套调用目标。
 
 ### 4.2 Mermaid 格式
 
@@ -138,7 +148,7 @@ Mermaid 节点形状决定节点在流程中的角色：
 | 圆形 | `name((text))` | 结束 — 终止任务 | `end_node((结束))` |
 | 矩形 | `name[aisop.sub]` | 委派 — 调用子任务 `sub` | `call[aisop.validation]` |
 
-当节点文本以 `aisop.` 开头时，该节点是委派节点。`aisop.` 之后的文本是子任务名称。
+矩形节点的完整文本去掉可选外围引号后须等于 `aisop.<name>` 才是委派，以`aisop.`开头却不匹配完整委派形式的矩形标签不合法，不得当作普通处理节点；见 §4.4。
 
 #### 4.2.2 边类型
 
@@ -149,6 +159,22 @@ Mermaid 边类型决定连接语义：
 | 实线箭头 | `-->` | 正常流程（下一步） | `greet --> classify` |
 | 标签箭头 | `-->\|label\|` | 分支（条件） | `route -->\|billing\| billing_handler` |
 | 虚线箭头 | `-.->` | 错误路由 | `risky_step -.-> error_handler` |
+
+支持的箭头为 `-->`、`-->|label|`、`--> |label|`、`-- label -->`、`-.->`。`A & B --> C & D` 展开为 A→C、A→D、B→C、B→D。`x["文字"]` 中外围引号界定标签；引号里的箭头、&、竖线和括号是文字而非连接。
+
+在参考子集中，节点或分支标签区间的首个非W字符是单引号或双引号时才进入引用保护；匹配且未被转义的闭合引号之后，到标签结束符之前只能有W。未引用文字中间的撇号或引号（如Don't、He said "go"）是数据，不开启引用保护。未闭合引用或额外非W后缀产生PARSE_PARTIAL，不算完整解析行。
+
+保护与输出分开：节点标签原文不trim，仅当一对外围引号恰占第一、最后字符时剥除一次。因此 `a[ "x ] y" ]` 中的内部括号受保护，但标签仍保留空格和引号。分支标签先修剪外围W，再剥除一次外围引号；引号内空格保留。反斜杠仅保护紧随字符的边界识别，输出仍保留反斜杠。JSON只解码一次，不在标签内再次解码。
+
+参考解析器使用以下固定空白集合W，不使用宿主strip/trim或Unicode属性的默认集合：
+
+~~~text
+[\u0009-\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]
+~~~
+
+W用于整步首尾、图行及端点外围、声明空白和分支标签外围；节点标签数据保留。固定 `RUN `、store分隔符及箭头token间隔沿用既有ASCII空格/TAB规则，不把其他分隔符洗成合法语法。图仅按CRLF、LF、CR分行；标签数据内的U+2028/U+2029保留为字符，不另起图行。
+
+U+001C-U+001F、U+0085、U+FEFF（B）不是语法空白。合法整步调用的首尾W可接受；明确的B包围、错误间隔RUN候选，以及逗号/分号（含，；、）后混写调用，报CALL_SYNTAX。这是有限候选识别，不分析任意散文。图中保留确定的NAME错误及PARSE_PARTIAL、空图SHAPE边界，不静默删除非法字符，也不把所有情况一律降为警告。
 
 #### 4.2.3 并行分叉与汇聚
 
@@ -210,7 +236,7 @@ JSON flow 图是一个对象，每个键是节点名称，值定义节点的连�
 | `branches` | object | 条件分支：`{标签: 目标节点}` |
 | `error` | string | 错误处理节点 |
 | `delegate_to` | string | 调用子任务 |
-| `wait_for` | string[] | 等待这些节点完成后继续（汇聚） |
+| `wait_for` | string[] | 表示汇聚拓扑；join 行为还要求 join 配置和多条正常入边。 |
 
 所有字段可选。空对象 `{}` 表示结束节点。
 
@@ -221,11 +247,13 @@ JSON flow 图是一个对象，每个键是节点名称，值定义节点的连�
 | 优先级 | 结构 | 推断行为 |
 |--------|------|---------|
 | 1 | 空对象 `{}` | 结束 — 终止任务 |
-| 2 | 有 `branches` | 决策 — 条件路由 |
-| 3 | 有 `delegate_to` | 委派 — 调用子任务，然后继续到 `next` |
-| 4 | 有 `wait_for` | 汇聚 — 等待所有列出的节点，然后继续 |
+| 2 | 有 `delegate_to` | 委派 — 调用子图，然后判断 branches 或继续 next |
+| 3 | 有 `branches` | 决策 — 条件路由 |
+| 4 | 有 `wait_for` | 汇聚拓扑 — 已激活 join 时，完成汇聚并执行本节点步骤，然后继续到 `next` |
 | 5 | 有 `next`（2+ 目标） | 并行分叉 — 并发执行目标 |
 | 6 | 有 `next`（1 个目标） | 处理 — 执行后继续 |
+
+wait_for 表示汇聚拓扑，汇聚行为还需要函数中的 join 配置与多条正常入边共同激活。此表仅在节点级模式不冲突时应用；委派与已激活 join 并存不合规（§5.3）。
 
 #### 4.3.3 错误路由
 
@@ -247,14 +275,14 @@ JSON flow 图是一个对象，每个键是节点名称，值定义节点的连�
   "aisop": {
     "main": {
       "start":    { "next": ["gen"] },
-      "gen":      { "delegate_to": "generate_sub", "next": ["fork"] },
+      "gen":      { "delegate_to": "generate_content", "next": ["fork"] },
       "fork":     { "next": ["branch_a", "branch_b"] },
       "branch_a": { "next": ["merge"] },
       "branch_b": { "next": ["merge"] },
       "merge":    { "wait_for": ["branch_a", "branch_b"], "next": ["end"] },
       "end":      {}
     },
-    "generate_sub": {
+    "generate_content": {
       "scaffold": { "next": ["content"] },
       "content":  { "next": ["done"] },
       "done":     {}
@@ -262,6 +290,33 @@ JSON flow 图是一个对象，每个键是节点名称，值定义节点的连�
   }
 }
 ```
+
+### 4.4 子图与调用
+
+1. **结构：** main 与子图并列放在 aisop 中，不新增子图容器。sub_mermaid、sub_jsonflow 是图值格式的叫法，不是新字段。
+2. **名字：** 图名、节点名及 RUN 结果变量匹配 `[A-Za-z_][A-Za-z0-9_]*`。建议按功能命名，但不禁止 sub 本身。JSON delegate_to 只写裸图名。
+3. **入口：** 必须有 main，由顶层 instruction 进入；禁止嵌套调用 main。每张图从其首个声明节点进入。
+4. **调用：** 使用完整 Mermaid 标签 `aisop.<name>`（可带外围引号）、JSON `delegate_to: "<name>"`，或整步 `RUN aisop.<name>`，可追加 ` -> <variable>`。索引式、节点标签里的 RUN 及散文与调用混写均不合规。矩形标签的保留前缀 `aisop.` 必须匹配完整委派形式。 对完整解析的矩形，从原始标签区域取判定副本：去外围 W/B、至多剥一对完整外围引号，再去该层外围 W/B。副本以 aisop. 开头但原文不是合法委派时，报 CALL_SYNTAX，不修复执行。公开标签数据不变；a["'aisop.helper'"] 仍为普通数据。
+5. **定位：** 先找本文件；坏的本地目标不能由外部同名目标覆盖。独立文件必须本地解析，程序组成部分可用消费方传入的 resolver。未定位不代表已核验；回调结果是消费方声明，不是外部信任证明。
+6. **顺序与计次：** 无同目标显式 RUN 时，先执行准备步骤，再按节点委派。有同目标显式 RUN 时，每次实际执行到该步骤调用一次，标签或 delegate 不再追加调用。其他目标 RUN 仍为准备。失败、拒绝或终止可使后续调用无法到达。重复调用建议画多个节点或回环，不新增强制 lint。
+7. **上下文与结果：** 遵守 context_filter。可选 -> 绑定子图明确定义的业务完成输出，不是全部上下文或隐式 last_result。显式传递沿用 output_mapping/state，不新增 return 字段或统一结果形状。
+8. **返回：** 子图完成后回到调用者下一步骤，再进行路由；main 完成则程序结束。终止节点有步骤时先执行再完成。父节点局部变量在调用期间保留直到父节点完成（§6.9），子节点局部变量不泄漏。
+9. **局部路由与错误：** next、branches、error、wait_for、on_error 目标属于当前图，共享函数每次使用均分别核对。运行时缺失目标及未处理子图错误按 §6.12；on_error 不能把静态错误降级。
+10. **无环：** 本地子图调用环（含自调）不合规；正常流程回环不等于子图递归。不据此认证终止性或跨文件无环。
+11. **共享节点：** 同名节点共用 functions 定义；除非全部为入口或全部为终止节点，否则提醒。入口与终止角色可以兼具；豁免不是安全或隔离证明。
+12. **格式：** flow_format 必填；mermaid 允许字符串图，jsonflow 允许对象图，hybrid 允许两者，不提供默认值。
+13. **返回后分支：** 委派行为优先于 branches，保留条件路由并在调用返回后判断。
+14. **未调用：** 非 main 子图无有效本地入调用时提醒。不据此证明从 main 可达；部分解析不能支持确定的未调用结论。
+15. **确认：** 子图中已有 sys.io.confirm 在实际到达时仍必须执行。每次实际到达的确认都须独立取得真人答复，不合并、不跳过、不复用批准；静态检查不能证明运行时强制执行。
+
+以下片段不是完整程序。两条消息、全部函数及业务输出定义见[完整子图示例](../reference/python/example_subgraphs.aisop.json)。
+
+```json
+{"aisop":{"main":"graph TD\n    intake[Read] --> diagnose[aisop.diagnose]\n    diagnose --> reply[Reply]\n    reply --> end_node((End))","diagnose":"graph TD\n    gather_info[Gather] --> analyze[Analyze]\n    analyze --> diagnose_done((Done))","extract_keywords":{"parse":{"next":["rank"]},"rank":{"next":["keywords_done"]},"keywords_done":{}}},"functions":{"gather_info":{"step1":"Prepare text","step2":"RUN aisop.extract_keywords -> keywords","step3":"Use keywords in this node"}}}
+```
+
+参考检查器只支持有限语法，不执行程序：不支持的 Mermaid 行产生 PARSE_PARTIAL，不能称完整合规。无 resolver 时缺失的组成部分目标为 WARNING，standalone=True 时为 ERROR。resolver 必须返回严格布尔值，异常或其他值属于错误，且不能覆盖坏的本地图。
+
 
 ---
 
@@ -303,12 +358,12 @@ JSON flow 图是一个对象，每个键是节点名称，值定义节点的连�
 
 函数体中的键分为两类：
 
-- **执行步骤**：`step1`, `step2`, ... `stepN` — 运行时按顺序执行
+- **执行步骤**：键必须匹配 `step[1-9][0-9]*`；按 N 的数值顺序执行，不按成员书写或字典序。允许间隔及任意长度的正编号。
 - **保留键**（`RESERVED_KEYS`）：被识别为行为配置，不作为步骤执行
 
 | 键 | 类型 | 说明 |
 |----|------|------|
-| `join` | object | 汇聚运行时配置（merge_strategy, timeout） |
+| `join` | object | 汇聚运行时配置（merge_strategy, timeout_seconds） |
 | `map` | object | 并行遍历集合 |
 | `on_error` | object | 按错误类型路由到处理节点 |
 | `retry_policy` | object | 失败时自动重试，带退避策略 |
@@ -322,8 +377,13 @@ JSON flow 图是一个对象，每个键是节点名称，值定义节点的连�
 > - 函数中的 `join` 只包含运行时配置（`merge_strategy`、`timeout_seconds`）。视觉汇聚在 Mermaid 中展示。
 
 **运行时解析规则：**
-- 不在 `RESERVED_KEYS` 中的键 → 执行步骤
+- 合法 stepN 键且值为去除固定 W 后非空的字符串 → 执行步骤；空白仅用于判定，不改写数据。
+- 未知非保留键（包括 step0、step01、Step1）、非字符串或仅含 W 的步骤值都是静态错误，即使函数未被引用也不豁免。不执行或查询其中的调用；其他合法步骤仍独立检查。
 - 在 `RESERVED_KEYS` 中的键 → 行为配置
+
+步骤编号按十进制位数及数字排序，不转换成宿主有界数值。允许零步骤及仅配置的函数；图节点声明顺序和入口选择不变。
+
+迁移时，若成员书写顺序与编号数值顺序不同，须核对确认、变量产生/读取和调用。由作者决定是否重编号；不得静默重命名未知键、删除确认或把普通说明搬进 constraints。静态调用检查不证明业务等价。
 
 #### 5.2.1 子任务调用
 
@@ -335,7 +395,7 @@ JSON flow 图是一个对象，每个键是节点名称，值定义节点的连�
 
 ```mermaid
 graph TD
-    gen[aisop.generate_sub] --> validate[验证]
+    gen[aisop.generate_content] --> validate[验证]
 ```
 
 如果委派节点需要额外的运行时配置，在函数中添加步骤：
@@ -346,12 +406,12 @@ graph TD
 
 **(b) 步骤层 `RUN aisop.<sub>`（行为，在函数内部）：**
 
-函数步骤可以在执行中途调用子任务。语法：在步骤文本中使用 `RUN aisop.<sub_name>`，与 `instruction` 字段语法一致。
+调用独占完整步骤：`RUN aisop.<name>` 或 `RUN aisop.<name> -> <variable>`。顺序、返回及定位见 §4.4；顶层 instruction 仍为 `RUN aisop.main`。
 
 | 层级 | 位置 | 语法 | 场景 |
 |------|------|------|------|
 | 节点层 | §4 Mermaid | `name[aisop.sub]` | 整个节点委派给子任务 |
-| 步骤层 | §5 函数步骤 | step 中写 `RUN aisop.sub` | 执行中途调用子任务 |
+| 步骤层 | §5 函数步骤 | `RUN aisop.sub`独占整步 | 在准备与结果处理步骤之间调用 |
 
 节点层 = Mermaid 能画出来（拓扑）。
 步骤层 = Mermaid 画不出来（行为，隐藏在函数内部）。
@@ -366,11 +426,17 @@ graph TD
 
 执行顺序：step1 → step2（进入 extract_keywords 子任务，完成后返回）→ step3
 
-> **已弃用：** 在同一步骤中混合自然语言和 `RUN aisop.<sub>`（例如 `"从网上获取信息，RUN aisop.extract_keywords"`）已弃用。请使用独立步骤。参见 §6.1 的单步单模式规则。
+> **不合规：** 同一步混写自然语言与 RUN 调用违反 §6.1 单步单模式。必须拆开步骤；明确错误的调用语法是错误，不是已弃用的另一种写法。
+
+混写检查先接受合法整步 RUN，再保留明确非法前缀、间隙、B 包裹及索引式调用诊断。其他情况中，位于开头或前字符不属 ASCII 标识符字符的、引号外 RUN aisop. 候选，若不是合法整步调用则报 CALL_SYNTAX，包括以 sys. 开头的步骤。标识符边界是 [A-Za-z0-9_]，不是 Unicode 词界或标点清单；fooRUN、foo_RUN 不因此新增为候选。
+
+仅位于开头或前字符不属 ASCII 标识符字符的、匹配且未转义的单双引号保护字面量；连续反斜杠的奇偶决定转义。Don't 等单词撇号不启动保护；未闭合引号不能隐藏后文。有限扫描不改写数据、不完整解析 sys 参数，也不证明任意散文安全。
 
 #### 5.2.2 `join`
 
 Mermaid 展示视觉汇聚（多条边指向一个节点）。函数中的 `join` 键只包含运行时配置：如何合并、等待多长时间。
+
+join 完成后，每次节点执行尝试执行一次本节点自己的步骤；重试不提供副作用恰好一次的保证。本条不重新定义 join 何时完成，也不改变 merge_strategy 或超时行为。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -396,7 +462,7 @@ graph TD
 
 ```json
 "merge_results": {
-  "step1": "合并所有分支的结果",
+  "step1": "处理已经合并的分支结果",
   "join": {
     "merge_strategy": "array",
     "timeout_seconds": 120
@@ -406,7 +472,11 @@ graph TD
 
 #### 5.2.3 `map`
 
-遍历集合，为每个元素执行指定函数。当函数体包含 `map` 时，替代步骤执行。
+遍历集合，为每个元素执行指定函数。按配置策略完成逐项处理后，每次节点执行尝试执行一次本节点自己的步骤。
+
+当 `on_item_error: "fail"` 时，条目失败使本次节点尝试失败，不执行本节点自己的步骤，按 §5.2.4、§6.12 处理。既有重试不意味着回滚或副作用恰好一次；本条不新增在途任务取消策略。使用 `skip` 或 `collect` 时，先按该策略完成逐项处理，再执行本节点自己的步骤。
+
+空集合不执行任何迭代，但仍执行一次本节点自己的步骤。无效 items_path 不等同于空集合。本条不新增结果字段或统一聚合形状。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -418,7 +488,7 @@ graph TD
 
 ```json
 "batch_search": {
-  "step1": "搜索列表中的每个关键词",
+  "step1": "汇总已经完成的搜索结果",
   "map": {
     "items_path": "state.keywords",
     "iterator": "search_one",
@@ -432,7 +502,9 @@ graph TD
 
 按错误类型路由到不同的处理节点。比 Mermaid 的 `-.->` 错误边更精细：`-.->` 是拓扑层的默认错误边，而 `on_error` 提供基于类型的分派。
 
-匹配顺序：精确类型 → 分类匹配 → `default` → Mermaid `-.->` 错误边。
+匹配顺序：精确类型 → default → 当前图 Mermaid -.-> 或 JSON error 错误边。子图仍未处理的错误回传父调用节点（§6.12）。不定义类别匹配。
+
+下例 timeout/tool_error 是精确的自定义类型；timeout 不自动匹配 command_timeout 或 confirm_timeout。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -520,8 +592,8 @@ graph TD
 
 - **默认值**：`"inline"`。不声明 `execute_mode` 等同于 `"execute_mode": "inline"`。
 - **位置**：放在 `constraints` 之后 — 函数定义的最后一个字段。
-- **未知值**：执行器应回退到 `"inline"` 并发出警告。
-- **可扩展**：执行器可在 `"inline"` 和 `"agent"` 之外定义额外值，但必须支持这两个基础值。
+- **显式值**：仅精确字符串 `"inline"`、`"agent"` 合法。null、其他类型、大小写变化或外围空白均为静态错误；不得回退，零步骤或未引用函数也不豁免。
+- **能力**：此字段不允许实现自定义额外值。执行器不支持声明的模式时必须停止，不得静默改为 inline；值合法不证明执行器具备相应能力。
 
 **Inline 模式（默认）** — 不需要声明 `execute_mode`：
 
@@ -547,10 +619,10 @@ graph TD
 
 运行时按以下顺序处理每个节点：
 
-0. `execute_mode` — 确定派发模式（`"inline"` 或 `"agent"`）。如果为 `"agent"`，执行器为此节点生成独立 Agent。如果为 `"inline"` 或未声明，在当前上下文中继续执行。
+0. `execute_mode` — 确定派发模式（`"inline"` 或 `"agent"`）；未声明即 inline。显式非法值在执行前拒绝。声明 agent 时使用独立 Agent；不支持就停止，不得静默改为 inline。
 1. `context_filter` — 过滤输入上下文
 2. `retry_policy` — 用重试逻辑包装执行
-3. **执行步骤** — `step1`, `step2`, ...（或被替代执行取代）
+3. **执行节点行为与步骤** — 先完成已激活的 join 或 map 阶段，再按 N 的数值顺序执行合法 stepN；节点级委派按 §4.4 处理
 4. `on_error` — 按类型路由错误
 5. `output_mapping` — 存储输出
 
@@ -559,19 +631,21 @@ graph TD
 | 优先级 | 匹配规则 | 模式 |
 |--------|---------|------|
 | 1 | 以 `sys.` 开头 | 系统调用（见 §6） |
-| 2 | 以 `RUN aisop.` 开头 | 步骤层子任务调用 |
+| 2 | 完整合法的`RUN aisop.<name>`，可接` -> <variable>` | 步骤层子任务调用 |
 | 3 | 其他 | 自然语言指令 |
 
-一步 = 一种模式。不允许混合。需要组合模式时使用独立步骤。
+一步 = 一种模式。不允许混合。需要组合模式时使用独立步骤。参考 classify_step/classifyStep 前缀分类仅是词法提示，不证明整步调用合法；应使用 parse_call/parseCall 和 check。明确错误的调用不能静默降级为散文。
 
-**替代执行**（由 Mermaid 拓扑触发）：
-- 如果节点是委派（`aisop.<sub>` 标签）→ 替代步骤，调用子任务
-- 如果节点有多个入边且函数中有 `join` → 替代步骤，等待并合并
-- 如果函数体有 `map` → 替代步骤，遍历集合
+**节点级行为**（不丢弃本节点自己的步骤）：
+- 委派标签或 JSON delegate_to 按 §4.4 执行准备、调用及结果处理，不丢弃准备步骤。
+- 如果节点有多条正常入边且函数中有 `join`，join 完成后执行本节点自己的步骤；既有合并与超时规则不变
+- 如果函数体有 `map`，先处理条目，再按 §5.2.3 执行本节点自己的步骤
 - 委派 / 汇聚 / map 互斥 — 一个节点最多有一个
 
+join/map 步骤内的整步 RUN 仍是普通子图调用，不是另一种节点级委派。检查器可以继续收集冲突节点中语法有效的潜在调用引用，但不据此认定该节点可执行；模式冲突仍是错误。
+
 **步骤层子任务调用：**
-- 如果步骤文本以 `RUN aisop.<sub_name>` 开头，运行时暂停当前步骤，执行指定子任务，完成后恢复下一步骤
+- 整步 RUN（§5.2.1）暂停当前节点，调用目标，成功后续行下一步骤；同目标显式步骤使节点级委派不再追加调用（§4.4）。
 - 这不替代步骤 — 是步骤执行内部的嵌套调用
 
 ---
@@ -640,7 +714,7 @@ sys.*
 ```json
 "step2": "sys.io.confirm('即将删除所有数据，此操作不可逆。确认？')"
 "step3": "sys.io.confirm('确认部署？', timeout=300)"
-"step4": "sys.io.confirm('选择操作', options=['批准', '拒绝', '修改']) -> choice"
+"step4": "sys.io.confirm('选择操作', options=['完整', '部分']) -> choice"
 ```
 
 **运行时行为：**
@@ -650,7 +724,13 @@ sys.*
 | 批准（approve） | 继续执行下一步骤 |
 | 拒绝（reject） | 抛出 `confirm_rejected` 错误 |
 | 超时 | 抛出 `confirm_timeout` 错误 |
-| 选择自定义选项 | 选择值通过 `-> 变量名` 存入上下文，继续执行 |
+| 批准并选择自定义选项 | 批准的选择值通过 `-> 变量名` 存入上下文，继续执行 |
+
+提供 options 时，每一项都是批准后的业务选择；只有人明确批准并选择某项时，才通过 -> 存入选择值并继续。实现必须同时提供独立的拒绝途径。拒绝抛 confirm_rejected，超时抛 confirm_timeout；不得根据选项名称推断拒绝，也不得因无响应自动选择某项。
+
+confirm_rejected 或 confirm_timeout 引出的处理路径不取得批准，也不能恢复失败确认的正常成功路径。不得执行该确认保护的操作，除非针对同一操作及其相关参数重新取得明确批准；无关确认不能替代。此限制同样适用于后续跳转、调用和重试，每次实际到达的确认仍须独立响应。
+
+这些是程序作者与运行时的义务；静态检查不能证明确认实际发生或该限制在执行时得到强制遵守。
 
 **不可侵犯属性（继承自公理 0）：**
 
@@ -664,9 +744,9 @@ sys.*
 | 规则 | 实现要求 |
 |------|---------|
 | **派发规则** | 当 `classify_step()` 返回 `sys_call` 且 `parse_sys_call().name` 为 `sys.io.confirm` 时，执行器必须路由到人类确认处理器。不得优化跳过、批量处理、自动批准或委托给 AI。 |
-| **禁止静默降级** | 如果运行时无法呈现确认界面（如无头模式），必须以 `confirm_timeout` 中止执行——绝不能静默批准。 |
+| **禁止静默降级** | 如果运行时无法呈现确认界面（如无头模式），必须抛出 `confirm_timeout` 并按 §6.12 处理——绝不能静默批准。 |
 | **子任务验证** | 执行委托的子 AISOP（`RUN aisop.*`）之前，运行时应验证父定义中的 `sys.io.confirm` 步骤未在子任务中被移除。移除即为协议违规。 |
-| **审计追踪** | 每次 `sys.io.confirm` 调用及其人类响应（批准/拒绝/超时）必须被记录，且不可被脱敏删除。 |
+| **审计追踪** | 每次确认调用及结果必须被记录：是哪一个确认步骤、何时、批准/拒绝/超时，以及适用时选择了哪一项。决策事实不得删除或篡改。提示或选项中的敏感载荷可以在记录前最小化或脱敏，同时保留可追溯性。本条不要求记录批准人的身份或明文敏感标签。 |
 
 ### 6.3 其他 `sys.io` 调用
 
@@ -694,7 +774,7 @@ sys.*
 
 ### 6.5 `sys.assert` — 运行时断言
 
-使用确定性表达式引擎（§6.11）求值条件。失败时抛出 `assertion_error` 并中止。**不经过 LLM。**
+使用共同布尔表达式引擎（§6.11）求值条件。结果为假或表达式求值错误时抛出 `assertion_error`，保留存在的原因码，并按 §6.12 处理；只有最外层 main 也无处理者时才终止。该映射只针对实际sys.assert求值，不包括无关装载、静态、IO或确认失败。**不经过 LLM。**
 
 ```json
 "step1": "sys.assert('account_id != null', '账户 ID 必填')"
@@ -705,7 +785,7 @@ sys.*
 |-|--------------|---------------|
 | 性质 | 声明式，软约束 | 命令式，硬检查 |
 | 评估者 | AI/LLM 理解 | 确定性表达式引擎 |
-| 失败后果 | AI"应该"遵守 | **运行时立即中止** |
+| 失败后果 | AI"应该"遵守 | **抛出 assertion_error，按 §6.12 路由** |
 | 位置 | 函数级 | 步骤级 |
 
 ### 6.6 `sys.llm` — 显式模型调用
@@ -729,7 +809,7 @@ sys.*
 ### 6.7 `sys.code` — 代码执行
 
 - `sys.code.exec('语言', '代码')` — 执行代码**语句**（可有副作用）
-- `sys.code.eval('表达式')` — 对**表达式**求值（总是返回结果）
+- `sys.code.eval('表达式')` — 求值**布尔子集**（§6.11）；成功返回boolean，否则按求值原因失败，不返回false掩盖错误
 
 ```json
 "step1": "sys.code.exec('python', 'data.sort()')"
@@ -774,18 +854,24 @@ sys.*
 
 ```json
 "step1": "sys.security.redact('credit_card')"
-"step2": "sys.security.audit('支付完成，金额: $amount')"
+"step2": "sys.security.audit('支付完成')"
 ```
 
 ### 6.9 返回值与上下文存储
 
-**`->` 语法：** 有返回值的系统调用通过 `-> variable_name` 将结果存入节点上下文：
+**`->` 语法：** 系统调用及整步 RUN（§4.4）可用 `-> variable_name` 绑定节点局部结果。调用期间父节点只是暂停而非完成，局部值保留至其完成，子节点局部值不泄漏：
 
 ```json
 "step1": "sys.io.input('请输入路径') -> target_path",
 "step2": "sys.io.read(target_path) -> file_content",
 "step3": "分析 file_content 中的数据"
 ```
+
+**输入声明与作用域：** params 可选；省略或 {} 不声明类型，显式 null 非法。名字匹配 [A-Za-z_][A-Za-z0-9_]*，但排除 null/true/false；类型名为精确字符串 string、number、boolean、array、object 或 null。声明值 JSON null 不是类型名字符串 "null"。这些只是简单类型，不是默认值、必填项或嵌套 schema。
+
+输入对象的对应自有键存在即为已提供：null、false、0、空字符串都不是缺失。执行器须在进入 main 或产生副作用前核对已声明且已提供的值，不转换类型或交模型修复；boolean 不是 number、object 不含 array，null 只匹配 null 类型。类型不符是输入准入失败，不由图的 on_error 降级。未提供的可选输入不补 null、不自动必填；后续读取缺失值仍是错误。表达式整体 context 可选 null 的兼容不抹掉明确提供的参数 null。
+
+沿用执行器既有输入通道和同名变量，不将 system.content.params.environment 等类型元数据当作运行值。声明不注入 params 对象、不覆盖保留上下文、不授予额外输入权限、不绕过 context_filter。同名节点局部 -> 绑定只在该节点遮蔽输入，不修改原输入或隐式传播。参考 check 仅验证声明形状，不证明实际绑定、过滤或执行。
 
 **变量作用域：**
 
@@ -822,34 +908,64 @@ sys.*
 | 空检查 | `!= null`, `== null` |
 | 成员访问 | `.`（如 `result.exit_code`） |
 
+共同子集使用下列语法；优先级从成员路径、!、比较、&&到||依次降低。不接受源码括号、算术、函数调用、下标、赋值或连锁比较。
+
+~~~ebnf
+expression := or_expr
+or_expr := and_expr ("||" and_expr)*
+and_expr := comparison ("&&" comparison)*
+comparison := unary (("==" | "!=" | ">" | "<" | ">=" | "<=") unary)?
+unary := "!" unary | atom
+atom := NUMBER | STRING | true | false | null | path
+path := IDENT ("." IDENT)*
+IDENT := [A-Za-z_][A-Za-z0-9_]*
+~~~
+
+NUMBER使用JSON数字token语法，再核对§1的有限绝对值边界；不接受前导+、十六进制、下划线或不完整小数。标识符为ASCII；根null/true/false是完整token字面量，不可遮蔽。True、None、undefined等其他名字是变量，不是替代字面量；obj.true等成员名仍为普通键。
+
+STRING使用成对单引号或双引号、JSON转义，单引号串另支持\'。源码裸控制字符非法，合法解码的控制数据可比较。拒绝源码孤立代理项，合法配对按其标量字符比较。外层JSON与表达式字符串各在对应层只解码一次，不合并大小写、不做Unicode归一化，也不额外反转义。
+
+先验证完整语法和源码字面量，再从左到右按&&/||短路求值。未到达的变量及其载荷不读取。省略/null的整体context按空对象，其他非对象根为TYPE。这不抹掉明确提供的参数null（§6.9），也不认证未读取的上下文树。
+
+只读取对象自有数据成员。根或成员缺失为UNDEFINED；成员接收值不是对象则为TYPE，包括数组和null。不读取原型成员、数组length或访问器。输入域是JSON数据视图，不是任意Proxy或宿主对象的沙箱。
+
+值分为null、boolean、number、string、array、object。!、&&、||及最终条件只接受boolean，不作真值或隐式转换。不同JSON类型不相等，同类型原始值按值比较。容器可与null或其他类型比较，但两个非null数组或两个非null对象之间的相等/不等比较为TYPE，不作深比较或引用比较。排序只接受两个number。
+
+参考API成功返回boolean，失败抛带固定code AISOP_E_EXPR_SYNTAX、AISOP_E_EXPR_UNDEFINED、AISOP_E_EXPR_TYPE或AISOP_E_EXPR_RANGE的ValueError/Error。源码/转义损坏为SYNTAX，数据缺失为UNDEFINED，非法已读数据、Unicode或操作数类型为TYPE，字面量或已读数值非有限/越界为RANGE。不得返回false掩盖求值失败。
+
+仅在实际执行sys.assert时，其false结果或上述求值失败才映射为assertion_error，存在原因码时保留。不得把确认/取消、IO/系统故障、JSON装载或静态检查失败改成断言。sys.code.eval按求值原因失败，不伪造assertion_error。参考工具实现子集求值，但不实现两类系统调用派发或真人门。
+
 ### 6.12 标准错误类型
 
-系统调用引入的新错误类型，可在 `on_error`（§5.2.4）中匹配：
+系统调用与子图调用的标准错误，可用于 on_error（§5.2.4）。六项 sys.* 错误仍是子集，不是全部错误类型的白名单：
 
 | 错误类型 | 触发条件 | 来源 |
 |---------|---------|------|
 | `confirm_rejected` | 人类拒绝确认 | `sys.io.confirm` |
 | `confirm_timeout` | 确认等待超时 | `sys.io.confirm` |
-| `assertion_error` | 断言条件为假 | `sys.assert` |
+| `assertion_error` | 断言条件为假或其表达式求值失败；保留原因 | `sys.assert` |
 | `command_error` | 命令执行失败（非零退出码） | `sys.run` / `sys.run.bg` |
 | `command_timeout` | 命令执行超时 | `sys.run.timeout` |
 | `io_error` | 文件操作失败 | `sys.io.read/write` |
+| `subgraph_not_found` | 运行时实际找不到合法调用目标 | Mermaid 委派、JSON delegate_to 或整步 RUN（含 store） |
 
 错误路由优先级（复用 §5.2.4 机制）：
 
 ```
-系统调用抛出错误
-  → on_error 中匹配错误类型（如 "confirm_rejected": "handler_node"）
+节点或子图调用抛出错误（运行时缺失目标：subgraph_not_found）
+  → on_error 精确类型匹配
   → on_error.default
-  → Mermaid -..-> 错误边
-  → 中止执行
+  → 当前图 Mermaid -.-> 或 JSON error 错误边
+  → 子图仍未处理时按原类型回到父调用节点
+  → 仅最外层 main 仍无处理器时终止
 ```
+失败调用不伪造 store 值，不沿正常成功路径续跑。语法错误、坏本地图体、存在但不可读或不可解析的目标不一概属于 subgraph_not_found。即使有 on_error，静态 ERROR 仍是错误。处理不代表回滚或自动重试，retry_policy 仍按整个节点。
 
 ---
 
 ## 7. 变量替换
 
-标记为 `{variable}` 的字段在运行时替换：
+仅替换下表已定义的占位符。params 类型声明不新增 $amount、{amount} 或通用输入字符串插值，也不得把输入数据拼入指令后重新解析：
 
 | 变量 | 替换为 |
 |------|--------|
@@ -870,7 +986,7 @@ sys.*
 | 回环 | 分支目标 → 较早节点 | 分支目标 → 较早节点 | — |
 | 子任务 | `A[aisop.sub]` | `"delegate_to": "sub"` | — |
 | 收敛 | 多个 → 同一目标 | 多个 → 同一目标 | — |
-| 错误路由 | `A -.-> E` | `"error": "E"` | `"on_error": {"timeout": "t"}` |
+| 错误路由 | `A -.-> E` | `"error": "E"` | `"on_error": {"command_timeout": "t"}` |
 | 批量迭代 | — | — | `"map": {"items_path": ".."}` |
 | 重试 | — | — | `"retry_policy": {"max_attempts": 3}` |
 | 数据隔离 | — | — | `"context_filter": {"include": [...]}` |
@@ -925,7 +1041,7 @@ sys.*
           "step4": "sys.io.confirm('即将调整账单。确认？')",
           "step5": "执行账单调整",
           "retry_policy": { "max_attempts": 2, "correction_prompt": "账户查询失败，请重试" },
-          "on_error": { "timeout": "escalate", "confirm_rejected": "escalate", "default": "escalate" },
+          "on_error": { "confirm_timeout": "escalate", "confirm_rejected": "escalate", "default": "escalate" },
           "constraints": "账户 ID 必须有效。不得向用户暴露内部账户编号。",
           "execute_mode": "agent"
         },
@@ -944,7 +1060,7 @@ sys.*
         "check_logs":    { "step1": "检查系统日志中的错误" },
         "check_config":  { "step1": "验证配置设置" },
         "merge_results": {
-          "step1": "将所有检查结果合并为最终报告",
+          "step1": "根据已合并的检查结果生成最终报告",
           "join": { "merge_strategy": "array", "timeout_seconds": 60 }
         },
         "parse":     { "step1": "解析文本并提取候选关键词" },

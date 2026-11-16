@@ -8,6 +8,29 @@ build/
 node_modules/
 *.log
 .env
-.env.local
+.env.*
+!.env.example
+!.env.sample
+!.env.template
 .idea/
 .vscode/
+
+# Local environments and generated output
+.venv/
+venv/
+/site/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local secret files; public templates still require review
+.pypirc
+.netrc
+id_rsa
+id_ed25519
+*.pem
+*.key
+*.pfx
+*.p12

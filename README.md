@@ -13,13 +13,15 @@ AISOP enables defining multi-step AI programs with visual (Mermaid) or structura
 | Approach | Definition | Portable | Machine-readable | Token-efficient |
 |----------|-----------|----------|-----------------|-----------------|
 | Natural language prompts | Free text | Yes | No | No |
-| Python / YAML workflows | Code / config | No | Partially | No |
-| Visual builders (Dify, etc.) | Proprietary | No | No | No |
-| **AISOP** | **Mermaid + JSON** | **Yes** | **Yes** | **Yes** |
+| Python / YAML workflows | Code / config | Runtime-dependent | With suitable tooling | Representation-dependent |
+| Visual builders (Dify, etc.) | Tool-specific format | Export-dependent | Export-dependent | Representation-dependent |
+| **AISOP** | **Mermaid + JSON** | **With conformant consumers** | **Yes** | **Workflow-dependent** |
 
 AISOP files are plain JSON with flow graphs (Mermaid or JSON) — readable by any language, editable in any editor, versionable in git, and optimized for LLM comprehension.
 
 ## File Format
+
+AISOP files use the `.aisop.json` extension and contain two messages. The abbreviated outline below is schematic, not a complete JSON document.
 
 ```json
 [
@@ -30,8 +32,8 @@ AISOP files are plain JSON with flow graphs (Mermaid or JSON) — readable by an
 
 | Element | Purpose |
 |---------|---------|
-| `system` | Program metadata (identity, version, description) |
-| `user` | Instruction, flow graph, and function definitions |
+| `system` | Program metadata (identity, version, description, system prompt) |
+| `user` | Instruction, user input, flow graph, and function definitions |
 
 ## Quick Example
 
@@ -83,17 +85,17 @@ graph TD
 ## Key Features
 
 - **Dual Flow Format** — Mermaid string (AI-native) or JSON flow object (code-native), mixable in the same program
-- **14+ Control Flow Patterns** — sequential, decision, parallel fork/join, delegate, loop, convergence, error routing, batch iterate, retry, data isolation, step-level sub-task, agent dispatch, HITL confirmation, runtime assertion
+- **Control Flow Patterns** — sequential, decision, parallel fork/join, delegate, loop, convergence, error routing, batch iterate, retry, data isolation, whole-step subgraph call, agent dispatch, HITL confirmation, runtime assertion
 - **Three-Layer Separation** — metadata, flow graph, function definitions
 - **Topology / Behavior Split** — flow graph defines connections, functions define runtime behavior
-- **Sub-task Support** — `main` + named sub-tasks via delegate nodes or step-level `RUN aisop.<sub>`
+- **Subgraph Support** — main and functionally named peer graphs; node-level delegation or whole `RUN aisop.<name>` steps, optionally with ` -> <variable>`. See [§4.4](specification/aisop-spec.md#44-subgraphs-and-calls) for ordering, error propagation and confirmation boundaries
 - **Reserved Keys** — 8 runtime behavior keys in functions (join, map, on_error, retry_policy, context_filter, output_mapping, constraints, execute_mode)
 - **`sys.*` System Calls** — 24 protocol-reserved system calls for human confirmation (🔒 inviolable `sys.io.confirm`), I/O, assertions, model invocation, code execution, and state management (see §6)
-- **Error Handling** — Mermaid `-.->` error edge + function-level `on_error` type routing + 6 sys.* error types
+- **Error Handling** — Mermaid -.-> or JSON error edge, function-level on_error routing, 6 sys.* errors and subgraph_not_found
 - **Variable Substitution** — `{system_prompt}`, `{user_input}` replaced at runtime
-- **Token Efficient** — Mermaid uses ~50% fewer tokens than JSON flow format
-- **Zero Dependencies** — Reference implementations in Python and JavaScript, stdlib only
-- **AI-Agnostic** — Works with any AI runtime
+- **Compact Notation** — Mermaid can be shorter for some flows; token counts depend on the workflow, tokenizer and serialization, not a universal saving
+- **Zero Runtime Dependencies** — Python and JavaScript inspection libraries use only standard/built-in modules; package builds and the documentation site have separate requirements
+- **Runtime-Neutral** — Consumers must implement the applicable AISOP semantics; compatibility is not automatic for every AI host
 
 ## Flow Formats
 
@@ -122,7 +124,7 @@ AISOP supports two flow graph formats. Both can coexist in the same program.
 | `branches` | object | Conditional branching: `{label: target}` |
 | `error` | string | Error handler node |
 | `delegate_to` | string | Call a sub-task by name |
-| `wait_for` | string[] | Wait for nodes before proceeding (join) |
+| `wait_for` | string[] | Convergence topology; join behavior additionally requires join configuration and multiple normal incoming edges. |
 | `{}` | — | End — terminate task |
 
 ## Control Flow Patterns
@@ -137,11 +139,11 @@ AISOP supports two flow graph formats. Both can coexist in the same program.
 | Loop | Branch target → earlier node | Branch target → earlier node | — |
 | Sub-task | `A[aisop.sub]` | `"delegate_to": "sub"` | — |
 | Convergence | Multiple → same target | Multiple → same target | — |
-| Error routing | `A -.-> E` | `"error": "E"` | `"on_error": {"timeout": "t"}` |
+| Error routing | `A -.-> E` | `"error": "E"` | `"on_error": {"command_timeout": "t"}` |
 | Batch iterate | — | — | `"map": {"items_path": "..."}` |
 | Retry | — | — | `"retry_policy": {"max_attempts": 3}` |
 | Data isolation | — | — | `"context_filter": {"include": [...]}` |
-| Step-level sub | — | — | step text: `RUN aisop.sub` |
+| Whole-step subgraph call | — | — | whole step: `RUN aisop.sub` |
 | Agent dispatch | — | — | `"execute_mode": "agent"` |
 | HITL confirmation | — | — | `sys.io.confirm('...')` (§6.2) |
 | Runtime assertion | — | — | `sys.assert('...', '...')` (§6.5) |
@@ -165,6 +167,16 @@ node run.js example.aisop.json
 node test_all.js
 ```
 
+These reference commands load, check, analyze and build prompts; they do not execute business flows or prove runtime confirmation/error propagation. Both reference directories include the complete example_subgraphs.aisop.json.
+
+### Environment and Data Boundaries
+
+Running the references and their tests needs no pip or npm installation. The Python package declares Python 3.10+. The repository CI configuration covers Python 3.10-3.15 and Node.js 24 on ubuntu-24.04 and windows-2022. A configured matrix is not evidence of a successful workflow run.
+
+Building the Python package separately requires the setuptools backend declared in `reference/python/pyproject.toml` (77+ for its SPDX license metadata). Building the optional documentation site requires a compatible MkDocs, Material theme and Pymdown Extensions environment. These are not runtime dependencies; a skipped build is not a passing build.
+
+Inspection prints program metadata and steps; `--prompt` prints the constructed prompt. Command arguments may also remain in shell history or process listings. Use synthetic input, remove secrets and personal data before sharing output, and never treat a checker result or `.gitignore` as automatic redaction or trust verification.
+
 ## Project Structure
 
 ```
@@ -177,7 +189,8 @@ AISOP-Protocol/
       flow_runtime.py                # Python reference implementation
       example.aisop.json             # Example flow definition
       example_syscalls.aisop.json    # Advanced example with sys.* calls
-      test_all.py                    # Test suite (44 tests)
+      example_subgraphs.aisop.json   # Subgraphs, delegation and node-local results
+      test_all.py                    # Test suite (57 test functions)
       run.py                         # CLI tool
       pyproject.toml                 # Python package metadata
       LICENSE                        # Apache 2.0 license (per-package)
@@ -187,7 +200,8 @@ AISOP-Protocol/
       flow_runtime.js                # JavaScript reference implementation
       example.aisop.json             # Example flow definition
       example_syscalls.aisop.json    # Advanced example with sys.* calls
-      test_all.js                    # Test suite (44 tests)
+      example_subgraphs.aisop.json   # Subgraphs, delegation and node-local results
+      test_all.js                    # Test suite (57 test functions)
       run.js                         # CLI tool
       package.json                   # npm package metadata
       LICENSE                        # Apache 2.0 license (per-package)
@@ -204,16 +218,20 @@ AISOP-Protocol/
     adrs/
       adr-001-mermaid-as-primary-format.md    # ADR mirror (mkdocs site)
       adr-002-sys-io-confirm-immutability.md  # ADR mirror (mkdocs site)
+      adr-003-step-mode-exclusivity.md        # One-step-one-mode
+      adr-004-subgraph-invocation-rules.md     # Subgraph invocation rules
   adrs/
     adr-template.md                # ADR template
     adr-001-mermaid-as-primary-format.md       # Format choice rationale
     adr-002-sys-io-confirm-immutability.md     # Axiom 0 enforcement decision
+    adr-003-step-mode-exclusivity.md        # One-step-one-mode
+    adr-004-subgraph-invocation-rules.md     # Subgraph invocation rules
   README.md
   README_CN.md
   CONTRIBUTING.md                # Contribution guidelines
   CONTRIBUTING_CN.md             # 贡献指南
   CODE_OF_CONDUCT.md             # Community standards (Axiom 0 pledge)
-  GOVERNANCE.md                  # Tripartite Chain governance model
+  GOVERNANCE.md                  # Non-exclusive ecosystem roles and format stewardship
   SECURITY.md                    # Vulnerability reporting policy
   LICENSE                        # Apache 2.0 license
   NOTICE                         # Apache 2.0 attribution notice
@@ -229,17 +247,22 @@ AIXP Labs develops and maintains the following core projects:
 |---------|-------------|---------|
 | [HSAW](https://hsaw.dev) | Human Sovereignty and Wellbeing — Axiom 0 white paper (foundation) | hsaw.dev |
 | [AIZP](https://aizp.dev) | AI Zenith-Zero Protocol — runtime behavioral alignment | aizp.dev |
+| [AIIP](https://aiip.dev) | AI Intent Protocol — governed intent trees, priorities and feedback | aiip.dev |
+| [AIKP](https://aikp.dev) | AI Knowledge Protocol — long-term knowledge organization, navigation and governance | aikp.dev |
+| [AIJP](https://aijp.dev) | AI Job Protocol — schedulable work trees and job graphs | aijp.dev |
 | [AINP](https://ainp.dev) | AI Neogenesis Protocol — governable generation projects: plan + content + evidence | ainp.dev |
 | [AILP](https://ailp.dev) | AI List Protocol — agent discovery and capability advertising | ailp.dev |
 | [AIVP](https://aivp.dev) | AI Value Protocol — international commerce, crypto asset settlement | aivp.dev |
 | [AIRP](https://airp.dev) | AI RMB Protocol — Mainland China commerce, RMB licensed settlement | airp.dev |
 | [AIBP](https://aibp.dev) | AI Bot Protocol — social communication and trust | aibp.dev |
 | [AIAP](https://aiap.dev) | AI Application Protocol — governance and compliance | aiap.dev |
-| [AISP](https://aisp.dev) | AI Skill Protocol — single-file skills with machine-enforced contract red lines | aisp.dev |
+| [AISP](https://aisp.dev) | AI Skill Protocol — directory packages with a canonical AISOP skill entry and enforceable contract bindings | aisp.dev |
 | [AISOP](https://aisop.dev) | AI Standard Operating Protocol — flow program definition **(this project)** | aisop.dev |
+| [AIXPStore](https://aixpstore.dev) | Official marketplace for AIAP programs and AISP skills — discover, publish, and distribute AI capabilities | aixpstore.dev |
 | [SoulSkill](https://soulskill.dev) | AISP skill reference library & multi-CLI plugin distribution | soulskill.dev |
 | [SoulAgent](https://soulagent.dev) | Drop-in AI agent invoked directly by any CLI / SDK / IDE | soulagent.dev |
 | [SoulBot](https://soulbot.dev) | AI agent runtime & orchestration framework (scheduling, agent-spawn, inter-agent comms) | soulbot.dev |
+| [SoulRun](https://soulrun.dev) | AISOP execution engine as one call — runs AIAP programs and AISP skills for any host | soulrun.dev |
 | [SoulACP](https://soulacp.dev) | Adapter library — bridging CLI tools and LLM providers | soulacp.dev |
 
 ## Axiom
@@ -253,7 +276,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines / 见 [CONTRIBUTING_CN.md]
 ## Community & Governance
 
 - [Code of Conduct](CODE_OF_CONDUCT.md) — Community standards aligned with Axiom 0
-- [Governance](GOVERNANCE.md) — Tripartite Chain model (Seed / Authority / Executor)
+- [Governance](GOVERNANCE.md) — Ecosystem roles and independent format stewardship
 - [Security Policy](SECURITY.md) — Vulnerability reporting and `sys.io.confirm` immutability
 - [Architecture Decision Records](adrs/) — Design rationale for major decisions
 

@@ -1,0 +1,104 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  conformance:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }} / Node 24
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Python full suite
+        working-directory: reference/python
+        run: python -B test_all.py
+      - name: JavaScript full suite
+        working-directory: reference/javascript
+        run: node test_all.js
+      - name: Shared fixtures and standalone examples (Python)
+        shell: python
+        run: |
+          import ast
+          import json
+          import sys
+          from pathlib import Path
+
+          source = Path("reference/python/test_all.py").read_text(encoding="utf-8")
+          assignments = [
+              node for node in ast.parse(source).body
+              if isinstance(node, ast.Assign) and any(
+                  isinstance(target, ast.Name) and target.id == "SUBGRAPH_CASES_TEXT"
+                  for target in node.targets
+              )
+          ]
+          if len(assignments) != 1:
+              raise ValueError("Expected exactly one Python contract fixture")
+          python_text = ast.literal_eval(assignments[0].value)
+          javascript = Path("reference/javascript/test_all.js").read_text(encoding="utf-8")
+          marker = "const SUBGRAPH_CASES_TEXT = String.raw" + chr(96)
+          if javascript.count(marker) != 1:
+              raise ValueError("Expected exactly one JavaScript contract fixture")
+          javascript_text = javascript.split(marker, 1)[1].split(chr(96) + ";", 1)[0]
+          if python_text != javascript_text:
+              raise ValueError("Shared fixture text differs after source newline decoding")
+          cases = json.loads(python_text)
+          if not cases or len({case["id"] for case in cases}) != len(cases):
+              raise ValueError("Empty or duplicate contract fixtures")
+          sys.path.insert(0, str(Path("reference/python").resolve()))
+          from flow_runtime import check
+          samples = sorted(Path("reference").glob("*/*example*.aisop.json"))
+          if len(samples) != 6:
+              raise ValueError("Expected six standalone example files")
+          for sample in samples:
+              issues = check(json.loads(sample.read_text(encoding="utf-8")), standalone=True)
+              if issues:
+                  raise ValueError(str(sample) + ": " + json.dumps(issues))
+          print(str(len(cases)) + " shared cases; six Python standalone checks passed")
+      - name: Standalone examples (JavaScript)
+        shell: node {0}
+        run: |
+          const assert = require("assert/strict");
+          const fs = require("fs");
+          const path = require("path");
+          const {check} = require(path.resolve("reference/javascript/flow_runtime.js"));
+          let count = 0;
+          for (const language of ["python", "javascript"]) {
+            const directory = path.join("reference", language);
+            const names = fs.readdirSync(directory).filter(
+              name => name.startsWith("example") && name.endsWith(".aisop.json")
+            ).sort();
+            for (const name of names) {
+              const filename = path.join(directory, name);
+              const data = JSON.parse(fs.readFileSync(filename, "utf8"));
+              assert.deepEqual(check(data, null, true), [], filename);
+              count += 1;
+            }
+          }
+          assert.equal(count, 6);
+          console.log("Six JavaScript standalone checks passed");
